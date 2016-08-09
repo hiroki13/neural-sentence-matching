@@ -244,17 +244,10 @@ class Model(object):
         self.loss = - T.mean(pos_loss + max_loss)
 
     def max_margin(self, xp):
-        # num query * n_d
+        # 1D: n_queries, 2D: n_d
         query_vecs = xp[:, 0, :]  # 3D -> 2D
 
-        # num query
-#        pos_scores = T.sum(query_vecs * xp[:, 1, :], axis=1)
-
-        # num query * candidate size
-#        neg_scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 2:, :], axis=2)
-        # num query
-#        neg_scores = T.max(neg_scores, axis=1)
-
+        # 1D: n_queries, 2D: n_cands
         scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
         pos_scores = scores[:, 0]
         neg_scores = scores[:, 1:]
