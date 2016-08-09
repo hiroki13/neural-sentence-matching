@@ -20,7 +20,7 @@ class GRNN(Layer):
         self.create_parameters()
 
     def create_parameters(self):
-        self.W_e = create_shared(random_init((self.n_in, self.n_out)), name="W")
+        self.W_e = create_shared(random_init((self.n_in, self.n_out)), name="W_e")
         self.W = create_shared(random_init((self.n_out*2, self.n_out)), name="W")
         self.U = theano.shared(random_init((self.n_out*3, self.n_out*3)), name="U")
         self.G = theano.shared(random_init((self.n_out*2, self.n_out*2)), name="G")
@@ -83,20 +83,116 @@ class GRNN(Layer):
 
 class AttentionLayer(Layer):
 
-    def __init__(self, n_d, activation):
+    def __init__(self, a_type, n_d, activation):
+        self.a_type = a_type
         self.n_d = n_d
         self.activation = activation
+        self.forward = None
         self.create_parameters()
 
     def create_parameters(self):
         n_d = self.n_d
         self.W1_c = create_shared(random_init((n_d, n_d)), name="W1_c")
-        self.W1_h = create_shared(random_init((n_d, n_d)), name="W1_h")
-        self.w = create_shared(random_init((n_d,)), name="w")
-        self.W2_r = create_shared(random_init((n_d, n_d)), name="W1_r")
-        self.lst_params = [self.W1_h, self.W1_c, self.W2_r, self.w]
+        self.W1_q = create_shared(random_init((n_d, n_d)), name="W1_h")
+        self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
 
-    def forward(self, query, cands, mask=None, eps=1e-8):
+        if self.a_type == 'bi':
+            self.W = create_shared(random_init((n_d, n_d)), name="W")
+            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.W]
+            self.forward = self.forward_bilinear
+        elif self.a_type == 'ip':
+            self.lst_params = [self.W1_q, self.W1_c, self.W2_r]
+            self.forward = self.forward_inner_product
+        else:
+            self.w = create_shared(random_init((n_d,)), name="w")
+            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w]
+            self.forward = self.forward_standard
+
+    def forward_bilinear(self, query, cands, mask=None, eps=1e-8):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
+        :param eps: float
+        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        """
+
+        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
+        M_q = T.dot(query, self.W1_q).dimshuffle((0, 'x', 1, 2))
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M_q = T.repeat(M_q, repeats=cands.shape[1], axis=1)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: 1, 4D: dim_h
+        M_c = T.dot(cands, self.W1_c).dimshuffle((0, 1, 'x', 2))
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M_c = T.repeat(M_c, repeats=query.shape[1], axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M = T.dot(M_q, self.W)
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
+        M = T.tanh(T.sum(M * M_c, axis=3))
+        # 1D: n_queries * (n_cands-1), 2D: n_words
+        M = M.reshape((M.shape[0] * M.shape[1], M.shape[2]))
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
+        alpha = T.nnet.softmax(M)
+        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
+
+        if mask is not None:
+            if mask.dtype != theano.config.floatX:
+                mask = T.cast(mask, theano.config.floatX)
+            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
+            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        r = T.sum(query.dimshuffle((0, 'x', 1, 2)) * alpha, axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        h_after = T.tanh(T.dot(r, self.W2_r))
+        return h_after
+
+    def forward_inner_product(self, query, cands, mask=None, eps=1e-8):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
+        :param eps: float
+        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        """
+
+        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
+        M_q = T.tanh(T.dot(query, self.W1_q)).dimshuffle((0, 'x', 1, 2))
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M_q = T.repeat(M_q, repeats=cands.shape[1], axis=1)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: 1, 4D: dim_h
+        M_c = T.tanh(T.dot(cands, self.W1_c)).dimshuffle((0, 1, 'x', 2))
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M_c = T.repeat(M_c, repeats=query.shape[1], axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
+        M = T.tanh(T.sum(M_q * M_c, axis=3))
+        # 1D: n_queries * (n_cands-1), 2D: n_words
+        M = M.reshape((M.shape[0] * M.shape[1], M.shape[2]))
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
+        alpha = T.nnet.softmax(M)
+        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
+
+        if mask is not None:
+            if mask.dtype != theano.config.floatX:
+                mask = T.cast(mask, theano.config.floatX)
+            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
+            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        r = T.sum(query.dimshuffle((0, 'x', 1, 2)) * alpha, axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        h_after = T.tanh(T.dot(r, self.W2_r))
+        return h_after
+
+    def forward_standard(self, query, cands, mask=None, eps=1e-8):
         """
         :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
         :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
@@ -106,7 +202,7 @@ class AttentionLayer(Layer):
         """
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M = T.tanh(T.dot(query, self.W1_c).dimshuffle(0, 'x', 1, 2) + T.dot(cands, self.W1_h).dimshuffle(0, 1, 'x', 2))
+        M = T.tanh(T.dot(query, self.W1_q).dimshuffle(0, 'x', 1, 2) + T.dot(cands, self.W1_c).dimshuffle(0, 1, 'x', 2))
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         u = T.dot(M, self.w)

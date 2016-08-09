@@ -8,15 +8,19 @@ PAD = "<padding>"
 
 
 def train(args):
-    say('\n\tSEMANTICALLY EQUIVALENT QUESTION RANKING START\n\n')
+    say('\n\tSENTENCE MATCHING SYSTEM START\n\n')
 
-    """ Load files """
+    ##############
+    # Load files #
+    ##############
     # raw_corpus: {q_id: (title, body), ...}
     # embs: (word, vec)
     raw_corpus = io_utils.read_corpus(args.corpus)
     embs = load_embedding_iterator(args.embeddings) if args.embeddings else None
 
-    """ Set the vocabulary """
+    ######################
+    # Set the vocabulary #
+    ######################
     emb_layer = io_utils.get_emb_layer(raw_corpus=raw_corpus, n_d=args.hidden_dim, cut_off=args.cut_off, embs=embs)
     ids_corpus = io_utils.map_corpus(raw_corpus, emb_layer, max_len=args.max_seq_len)
     say("vocab size={}, corpus size={}\n".format(emb_layer.n_V, len(raw_corpus)))
@@ -45,7 +49,9 @@ def train(args):
         ))
         train_batches = None
 
-        """ Set a model """
+        ###############
+        # Set a model #
+        ###############
         if args.attention:
             model = attention_model.Model(args, emb_layer)
             say('\nModel: Attention model\n')
@@ -70,6 +76,9 @@ def train(args):
         if args.load_pretrain:
             model.load_pretrained_parameters(args)
 
+        #################
+        # Train a model #
+        #################
         model.train(
             ids_corpus,
             dev if args.dev else None,

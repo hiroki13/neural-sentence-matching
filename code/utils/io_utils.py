@@ -63,7 +63,7 @@ def get_emb_layer(raw_corpus, n_d, embs=None, cut_off=2, unk=UNK, padding=PAD, f
 def map_corpus(raw_corpus, embedding_layer, max_len=100):
     ids_corpus = {}
     for id, pair in raw_corpus.iteritems():
-        item = (embedding_layer.map_to_ids(pair[0], filter_oov=True)[:20],
+        item = (embedding_layer.map_to_ids(pair[0], filter_oov=True),
                 embedding_layer.map_to_ids(pair[1], filter_oov=True)[:max_len])
         # if len(item[0]) == 0:
         #    say("empty title after mapping to IDs. Doc No.{}\n".format(id))
@@ -88,11 +88,15 @@ def read_annotations(path, n_negs=20, prune_pos_cnt=10, data_size=1):
             pos = pos.split()
             neg = neg.split()
 
-            """ Check positive samples """
+            ##########################
+            # Check positive samples #
+            ##########################
             if len(pos) == 0 or len(pos) > prune_pos_cnt != -1:
                 continue
 
-            """ Pick up negative samples """
+            ############################
+            # Pick up negative samples #
+            ############################
             if n_negs != -1:
                 random.shuffle(neg)
                 neg = neg[:n_negs]
@@ -101,7 +105,9 @@ def read_annotations(path, n_negs=20, prune_pos_cnt=10, data_size=1):
             qids = []
             qlabels = []
 
-            """ Set negative samples """
+            ########################
+            # Set negative samples #
+            ########################
             for q in neg:
                 if q not in s:
                     qids.append(q)
@@ -109,7 +115,9 @@ def read_annotations(path, n_negs=20, prune_pos_cnt=10, data_size=1):
                     qlabels.append(0 if q not in pos else 1)
                     s.add(q)
 
-            """ Set positive samples """
+            ########################
+            # Set positive samples #
+            ########################
             for q in pos:
                 if q not in s:
                     qids.append(q)
@@ -164,6 +172,7 @@ def create_batches(ids_corpus, data, batch_size, padding_id, perm=None, pad_left
                 t, b = ids_corpus[id]
                 titles.append(t)
                 bodies.append(b)
+
         query_id = pid2index[query_id]
         pos = [pid2index[q] for q, l in zip(qids, qlabels) if l == 1 and q in pid2index]
         neg = [pid2index[q] for q, l in zip(qids, qlabels) if l == 0 and q in pid2index]

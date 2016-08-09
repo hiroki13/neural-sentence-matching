@@ -47,7 +47,7 @@ class Model(basic_model.Model):
         self.hb = hb
 
     def set_attention_layer(self, args, activation, idts, idbs, idps, ht, hb, n_d, dropout):
-        attention_layer = AttentionLayer(n_d=n_d, activation=activation)
+        attention_layer = AttentionLayer(a_type=args.a_type, n_d=n_d, activation=activation)
         self.layers.append(attention_layer)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
@@ -79,15 +79,14 @@ class Model(basic_model.Model):
             a_ht = (a_ht + a_hb) * 0.5
         cand_vecs = (xp[:, 1:, :] + a_ht) * 0.5
 
-        # 1D: n_queries, 2D: 1, 3D: n_d
-        pos_scores = T.sum(query_vecs * cand_vecs[:, 0, :], axis=1)  # 1D: n_queries
-
-        # 1D: n_queries, 2D: n_cands-2
-        neg_scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * cand_vecs[:, 1:, :], axis=2)
-        neg_scores = T.max(neg_scores, axis=1)  # 1D: n_queries
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * cand_vecs, axis=2)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        neg_scores = T.max(neg_scores, axis=1)
 
         diff = neg_scores - pos_scores + 1.0
         self.loss = T.mean((diff > 0) * diff)
+        self.train_scores = T.argmax(scores, axis=1)
 
     def set_scores(self, args, h_final, a_ht, a_hb):
         a_ht = a_ht.reshape((a_ht.shape[0] * a_ht.shape[1], a_ht.shape[2]))[:h_final.shape[0]-1]

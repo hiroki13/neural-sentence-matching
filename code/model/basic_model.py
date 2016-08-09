@@ -195,19 +195,74 @@ class Model(object):
         xp = h_final[idps.ravel()]
         xp = xp.reshape((idps.shape[0], idps.shape[1], n_d))
 
+        if self.args.loss == 'ce':
+            self.cross_entropy(xp)
+        elif self.args.loss == 'sbs':
+            self.soft_bootstrapping(xp, self.args.beta)
+        elif self.args.loss == 'hbs':
+            self.hard_bootstrapping(xp, self.args.beta)
+        else:
+            self.max_margin(xp)
+
+    def cross_entropy(self, xp):
+        # num query * n_d
+        query_vecs = xp[:, 0, :]  # 3D -> 2D
+        # 1D: n_queries, 2D: n_cands
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
+        probs = T.nnet.softmax(scores)
+
+        self.train_scores = T.argmax(scores, axis=1)
+        self.loss = - T.mean(T.log(probs[:, 0]))
+
+    def soft_bootstrapping(self, xp, beta=0.9):
+        # num query * n_d
+        query_vecs = xp[:, 0, :]  # 3D -> 2D
+        # 1D: n_queries, 2D: n_cands
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
+        probs = T.nnet.softmax(scores)
+        zeros = T.zeros(shape=(probs.shape[0], probs.shape[1]-1), dtype=theano.config.floatX)
+        ones = T.ones(shape=(probs.shape[0], 1), dtype=theano.config.floatX)
+        target = T.concatenate([ones, zeros], axis=1)
+
+        self.train_scores = T.argmax(scores, axis=1)
+        self.loss = - T.mean((beta * target + (1. - beta) * probs) * T.log(probs))
+
+    def hard_bootstrapping(self, xp, beta=0.9):
+        # num query * n_d
+        query_vecs = xp[:, 0, :]  # 3D -> 2D
+        # 1D: n_queries, 2D: n_cands
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
+        probs = T.nnet.softmax(scores)
+        z = T.argmax(probs, axis=1)
+
+        pos_probs = probs[:, 0]
+        max_probs = probs[T.arange(z.shape[0]), z]
+        pos_loss = (beta + (1. - beta) * pos_probs) * T.log(pos_probs)
+        max_loss = (beta + (1. - beta) * max_probs) * T.log(max_probs)
+
+        self.train_scores = T.argmax(scores, axis=1)
+        self.loss = - T.mean(pos_loss + max_loss)
+
+    def max_margin(self, xp):
         # num query * n_d
         query_vecs = xp[:, 0, :]  # 3D -> 2D
 
         # num query
-        pos_scores = T.sum(query_vecs * xp[:, 1, :], axis=1)
+#        pos_scores = T.sum(query_vecs * xp[:, 1, :], axis=1)
 
         # num query * candidate size
-        neg_scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 2:, :], axis=2)
+#        neg_scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 2:, :], axis=2)
         # num query
+#        neg_scores = T.max(neg_scores, axis=1)
+
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
         neg_scores = T.max(neg_scores, axis=1)
 
         diff = neg_scores - pos_scores + 1.0
         self.loss = T.mean((diff > 0) * diff)
+        self.train_scores = T.argmax(scores, axis=1)
 
     def set_cost(self, args, params, loss):
         l2_reg = None
@@ -239,7 +294,7 @@ class Model(object):
 
         train_func = theano.function(
             inputs=[self.idts, self.idbs, self.idps],
-            outputs=[self.cost, self.loss, gnorm],
+            outputs=[self.cost, self.loss, gnorm, self.train_scores],
             updates=updates,
             on_unused_input='ignore'
         )
@@ -282,15 +337,20 @@ class Model(object):
 
             train_loss = 0.0
             train_cost = 0.0
+            crr = 0.
+            ttl = 0.
 
             for i in xrange(n_train_batches):
                 # get current batch
                 idts, idbs, idps = train_batches[i]
 
-                cur_cost, cur_loss, grad_norm = train_func(idts, idbs, idps)
+                cur_cost, cur_loss, grad_norm, preds = train_func(idts, idbs, idps)
 
                 train_loss += cur_loss
                 train_cost += cur_cost
+
+                crr += len([s for s in preds if s == 0])
+                ttl += len(preds)
 
                 if i % 10 == 0:
                     say("\r{}/{}".format(i, n_train_batches))
@@ -329,6 +389,7 @@ class Model(object):
                         float(grad_norm),
                         (time.time() - start_time) / 60.0
                     ))
+                    say("\tTrain Accuracy: %f (%d/%d)\n" % (crr / ttl, crr, ttl))
                     say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
                     say("\n")
                     say("{}".format(result_table))

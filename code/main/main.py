@@ -42,6 +42,9 @@ if __name__ == "__main__":
     argparser.add_argument("--bi", type=int, default=0)
     argparser.add_argument("--body", type=int, default=0)
     argparser.add_argument("--double", type=int, default=0)
+    argparser.add_argument("--loss", type=str, default='mm')
+    argparser.add_argument("--beta", type=float, default=0.9)
+    argparser.add_argument("--a_type", type=str, default='st')
 
     args = argparser.parse_args()
     print
