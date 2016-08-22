@@ -21,7 +21,7 @@ class Model(basic_model.Model):
 
         self.set_input_layer(idts=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
                              n_e=self.n_e, dropout=self.dropout)
-        self.set_intermediate_layer(args=self.args, prev_ht=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
+        self.set_intermediate_layer(args=self.args, prev_ht_l=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
         self.set_output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
 
         self.set_params(layers=self.layers)
@@ -40,7 +40,12 @@ class Model(basic_model.Model):
         elif args.layer.lower() == "gru":
             layer_type = GRU
 
-        for i in range(args.depth * 2):
+        if args.share_w:
+            depth = args.depth
+        else:
+            depth = args.depth * 2
+
+        for i in range(depth):
             if layer_type != RCNN:
                 feature_layer = layer_type(
                     n_in=n_e,
@@ -58,27 +63,65 @@ class Model(basic_model.Model):
                 )
             self.layers.append(feature_layer)
 
-    def set_intermediate_layer(self, args, prev_ht, prev_hb, layers, n_d):
-        prev_ht_b = prev_ht[::-1]
+    def set_intermediate_layer(self, args, prev_ht_l, prev_hb, layers, n_d):
+        # 1D: n_words, 2D: batch, 3D: n_d
+        prev_ht_r = prev_ht_l[::-1]
 
         for i in range(args.depth):
             # 1D: n_words, 2D: batch_size * n_cands, 3D: n_d
-            ht = layers[i * 2].forward_all(prev_ht)
-            ht_b = layers[i * 2 + 1].forward_all(prev_ht_b)
-            prev_ht = ht
-            prev_ht_b = ht_b
+            if args.share_w:
+                ht_l = layers[i].forward_all(prev_ht_l)
+                ht_r = layers[i].forward_all(prev_ht_r)
+            else:
+                ht_l = layers[i * 2].forward_all(prev_ht_l)
+                ht_r = layers[i * 2 + 1].forward_all(prev_ht_r)
+            prev_ht_l = ht_l
+            prev_ht_r = ht_r
 
         if args.normalize:
-            ht = self.normalize_3d(ht)
-            ht_b = self.normalize_3d(ht_b)
+            ht_l = self.normalize_3d(ht_l)
+            ht_r = self.normalize_3d(ht_r)
 
-#        W = create_shared(random_init((n_d*2, n_d)))
-#        ht = T.tanh(T.dot(T.concatenate([ht[-1], ht_b[-1]], axis=1), W))
-        ht = ht[-1] * ht_b[-1]
+        ht = self.conv_without_padding(ht_l, ht_r, self.idts)
         ht = self.normalize_2d(ht)
 
         self.ht = ht
-#        self.params.append(W)
+
+    def conv_without_padding(self, h_l, h_r, ids, eps=1e-8):
+        """
+        :param h_l: 1D: n_words, 2D: batch, 3D: n_d
+        :param h_r: 1D: n_words, 2D: batch, 3D: n_d
+        :param ids: 1D: n_words, 2D: batch
+        :return: 1D: batch, 2D: n_d
+        """
+        # 1D: n_words, 2D: batch, 3D: 1
+        mask = T.neq(ids, self.padding_id).dimshuffle((0, 1, 'x'))
+        mask = T.cast(mask, theano.config.floatX)
+
+        # 1D: batch, 2D: n_words, 3D: n_d
+        h_l = h_l * mask
+        h_l = h_l.dimshuffle((1, 0, 2))
+        h_r = h_r[::-1] * mask
+        h_r = h_r.dimshuffle((1, 0, 2))
+
+        # 1D: batch, 2D: 2 * n_words, 3D: n_d
+        h = T.concatenate([h_l, h_r], axis=2)
+        h = T.max(h + eps, axis=1)
+        return h
+
+    def set_loss(self, n_d, idps, h_final):
+        # 1D: n_queries, 2D: n_cands-1, 3D: 2 * dim_h
+        xp = h_final[idps.ravel()]
+        xp = xp.reshape((idps.shape[0], idps.shape[1], 2 * n_d))
+
+        if self.args.loss == 'ce':
+            self.cross_entropy(xp)
+        elif self.args.loss == 'sbs':
+            self.soft_bootstrapping(xp, self.args.beta)
+        elif self.args.loss == 'hbs':
+            self.hard_bootstrapping(xp, self.args.beta)
+        else:
+            self.max_margin(xp)
 
 
 class DoubleModel(basic_model.Model):

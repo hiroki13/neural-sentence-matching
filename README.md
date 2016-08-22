@@ -1,4 +1,4 @@
-# neural-sentence-matching-system
+# neural-sentence-matching
 
 This repo contains Theano implementations of our original models and the models described in the following papers:
 
@@ -27,5 +27,5 @@ To run the code, you need the following extra packages installed:
   3. Run `python code/main/main.py --help` to see all running options
 
 ##### Example Comand
-  - Basic RCNN Model `python code/main/main.py --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt`
-  - Attention RCNN Model `python code/main/main.py --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --attention 1`
+  - Basic RCNN Model: `python code/main/main.py --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt`
+  - Attention RCNN Model: `python code/main/main.py --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --attention 1`

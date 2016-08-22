@@ -370,7 +370,7 @@ class CNN(Layer):
         self.order = order
         self.clip_gradients = clip_gradients
 
-        internal_layers = self.internal_layers = [ ]
+        internal_layers = self.internal_layers = []
         for i in range(order):
             input_layer = Layer(n_in, n_out, linear, has_bias=False, clip_gradients=clip_gradients)
             internal_layers.append(input_layer)

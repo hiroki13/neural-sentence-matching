@@ -23,12 +23,11 @@ class Model(basic_model.Model):
                                  idps=self.idps, ht=self.ht, hb=self.hb, n_d=self.n_d, dropout=self.dropout)
         self.set_output_layer(args=self.args, ht=self.ht[-1], hb=self.hb[-1], dropout=self.dropout)
 
-        self.set_params(layers=self.layers)
-        self.set_loss(args=self.args, n_d=self.n_d, idps=self.idps, h_final=self.h_final,
-                      a_ht=self.a_ht, a_hb=self.a_hb)
-        self.set_cost(args=self.args, params=self.params, loss=self.loss)
-
+        self.set_loss(args=self.args, n_d=self.n_d, idps=self.idps, h_final=self.h_final, a_ht=self.a_ht, a_hb=self.a_hb)
         self.set_scores(args=self.args, h_final=self.h_final, a_ht=self.a_ht, a_hb=self.a_hb)
+
+        self.set_params(layers=self.layers)
+        self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
     def set_intermediate_layer(self, args, prev_ht, prev_hb, layers):
         for i in range(len(layers)):
@@ -50,13 +49,21 @@ class Model(basic_model.Model):
         attention_layer = AttentionLayer(a_type=args.a_type, n_d=n_d, activation=activation)
         self.layers.append(attention_layer)
 
+        if args.a_type == 'c':
+            attention = self.attention_c
+        else:
+            attention = self.attention
+
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        a_ht = self.attention(layer=attention_layer, h=ht, idps=idps, n_d=n_d, ids=idts)
-        self.a_ht = apply_dropout(a_ht, dropout)
+        a_ht = attention(layer=attention_layer, h=ht, idps=idps, n_d=n_d, ids=idts)
+#        a_ht, self.alpha = attention(layer=attention_layer, h=ht, idps=idps, n_d=n_d, ids=idts)
+        a_ht = apply_dropout(a_ht, dropout)
+        self.a_ht = a_ht
 
         if args.body:
-            a_hb = self.attention(layer=attention_layer, h=hb, idps=idps, n_d=n_d, ids=idbs)
-            self.a_hb = apply_dropout(a_hb, dropout)
+            a_hb = attention(layer=attention_layer, h=hb, idps=idps, n_d=n_d, ids=idbs)
+            a_hb = apply_dropout(a_hb, dropout)
+            self.a_hb = a_hb
 
     def set_output_layer(self, args, ht, hb, dropout):
         # 1D: n_queries * n_cands, 2D: dim_h
@@ -88,6 +95,28 @@ class Model(basic_model.Model):
         self.loss = T.mean((diff > 0) * diff)
         self.train_scores = T.argmax(scores, axis=1)
 
+    """
+    def set_loss(self, args, n_d, idps, h_final, a_ht, a_hb):
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        xp = h_final[idps.ravel()]
+        xp = xp.reshape((idps.shape[0], idps.shape[1], n_d))
+
+        query_vecs = xp[:, 0, :]
+
+        if args.body:
+            a_ht = (a_ht + a_hb) * 0.5
+        cand_vecs = a_ht
+
+        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * cand_vecs, axis=2)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        neg_scores = T.max(neg_scores, axis=1)
+
+        diff = neg_scores - pos_scores + 1.0
+        self.loss = T.mean((diff > 0) * diff)
+        self.train_scores = T.argmax(scores, axis=1)
+    """
+
     def set_scores(self, args, h_final, a_ht, a_hb):
         a_ht = a_ht.reshape((a_ht.shape[0] * a_ht.shape[1], a_ht.shape[2]))[:h_final.shape[0]-1]
 
@@ -97,6 +126,21 @@ class Model(basic_model.Model):
 
         cand_vecs = (h_final[1:] + a_ht) * 0.5
         self.scores = T.dot(cand_vecs, h_final[0])
+
+    """
+    def set_scores(self, args, h_final, a_ht, a_hb):
+#        a_ht = a_ht.reshape((a_ht.shape[0] * a_ht.shape[1], a_ht.shape[2]))[:h_final.shape[0]-1]
+#        a_ht = a_ht.reshape((a_ht.shape[0] * a_ht.shape[1], a_ht.shape[2]))
+        a_ht = a_ht.reshape((-1, a_ht.shape[2]))
+
+        if args.body:
+#            a_hb = a_hb.reshape((a_hb.shape[0] * a_hb.shape[1], a_hb.shape[2]))[:h_final.shape[0]-1]
+            a_hb = a_hb.reshape((-1, a_hb.shape[2]))
+            a_ht = (a_ht + a_hb) * 0.5
+
+        cand_vecs = a_ht
+        self.scores = T.dot(cand_vecs, h_final[0])
+    """
 
     def attention(self, layer, h, idps, n_d, ids):
         """
@@ -129,5 +173,42 @@ class Model(basic_model.Model):
         # query: 1D: n_queries, 2D: n_words, 3D: n_d
         q = h[:, idps.ravel()]
         query = q.reshape((q.shape[0], idps.shape[0], idps.shape[1], n_d)).dimshuffle((1, 2, 0, 3))[:, 0, :, :]
+
+        return layer.forward(query, C, mask)
+
+    def attention_c(self, layer, h, idps, n_d, ids):
+        """
+        :param layer:
+        :param h: 1D: n_words, 2D: n_queries * n_cands, 3D: dim_h
+        :param idps: 1D: n_queries, 2D: n_cands (zero-padded)
+        :param n_d: float32
+        :param ids: 1D: n_words, 2D: n_queries * n_cands
+        :return: 1D: 1D: n_queries, 2D: n_cands, 3D: dim_h
+        """
+
+        #####################
+        # Contexts and Mask #
+        #####################
+        # 1D: n_words, 1D: n_queries * n_cands, 3D: dim_h
+        c = h[:, idps.ravel()]
+        # C, ids: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_d
+        C = c.reshape((ids.shape[0], idps.shape[0], idps.shape[1], n_d)).dimshuffle((1, 2, 0, 3))[:, 1:]
+
+        #################
+        # Query vectors #
+        #################
+        # 1D: n_queries * n_cands, 2D: n_d
+        q = h[-1, idps.ravel()]
+        # 1D: n_queries, 2D: n_d
+        query = q.reshape((idps.shape[0], idps.shape[1], n_d))[:, 0]
+
+        ########
+        # Mask #
+        ########
+        # 1D: n_words, 2D: n_queries * n_cands
+        ids = ids[:, idps.ravel()]
+        # 1D: n_queries, 3D: n_cands, 3D: n_words
+        ids = ids.reshape((ids.shape[0], idps.shape[0], idps.shape[1])).dimshuffle(1, 2, 0)[:, 1:]
+        mask = T.neq(ids, self.padding_id)
 
         return layer.forward(query, C, mask)

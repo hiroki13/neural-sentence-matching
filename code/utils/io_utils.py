@@ -135,7 +135,7 @@ def read_annotations(path, n_negs=20, prune_pos_cnt=10, data_size=1):
     return lst
 
 
-def create_batches(ids_corpus, data, batch_size, padding_id, perm=None, pad_left=True):
+def create_batches(ids_corpus, data, batch_size, padding_id, data_indices=None, pad_left=True):
     """
     :param ids_corpus: {q_id: (title, body), ...}
     :param data: 1D: n_samples; elem=(qid=str, qids=[str, ..., ], qlabels=[0/1, ..., ])
@@ -146,41 +146,45 @@ def create_batches(ids_corpus, data, batch_size, padding_id, perm=None, pad_left
                   titles (or bodies): 1D: n_words, 2D: n_cands,
                   triples: [query_index, pos_index, neg_index1, neg_index2, ...]
     """
-    if perm is None:
-        perm = range(len(data))
-        random.shuffle(perm)
+    if data_indices is None:
+        data_indices = range(len(data))
+        random.shuffle(data_indices)
 
-    N = len(data)
+    n_data = len(data)
     cnt = 0
     pid2index = {}
     titles = []
     bodies = []
     triples = []
     batches = []
-    for u in xrange(N):
-        i = perm[u]
-        query_id, qids, qlabels = data[i]
-        if query_id not in ids_corpus: continue
+    for data_index in xrange(n_data):
+        i = data_indices[data_index]
+        query_id, cand_ids, qlabels = data[i]
+
+        if query_id not in ids_corpus:
+            continue
+
         cnt += 1
-        for id in [query_id] + qids:
-            if id not in pid2index:
-                if id not in ids_corpus: continue
+        for q_id in [query_id] + cand_ids:
+            if q_id not in pid2index:
+                if q_id not in ids_corpus:
+                    continue
 
                 """ Set index for each id """
-                pid2index[id] = len(titles)
+                pid2index[q_id] = len(titles)
 
-                t, b = ids_corpus[id]
+                t, b = ids_corpus[q_id]
                 titles.append(t)
                 bodies.append(b)
 
         query_id = pid2index[query_id]
-        pos = [pid2index[q] for q, l in zip(qids, qlabels) if l == 1 and q in pid2index]
-        neg = [pid2index[q] for q, l in zip(qids, qlabels) if l == 0 and q in pid2index]
+        pos = [pid2index[q] for q, l in zip(cand_ids, qlabels) if l == 1 and q in pid2index]
+        neg = [pid2index[q] for q, l in zip(cand_ids, qlabels) if l == 0 and q in pid2index]
 
         # 1D: batch_size, 2D: n_positive_samples; elem=[query_index, pos_index, neg1_index, neg2_index, ...]
         triples += [[query_id, x] + neg for x in pos]
 
-        if cnt == batch_size or u == N - 1:
+        if cnt == batch_size or data_index == n_data - 1:
             titles, bodies = create_one_batch(titles, bodies, padding_id, pad_left)
 
             """

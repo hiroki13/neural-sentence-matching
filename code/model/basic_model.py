@@ -1,4 +1,5 @@
 import time
+import math
 import gzip
 import cPickle as pickle
 
@@ -9,8 +10,8 @@ import theano.tensor as T
 
 from nn.initialization import get_activation_by_name
 from nn.optimization import create_optimization_updates
-from nn.basic import LSTM, GRU, apply_dropout
-from nn.advanced import RCNN, GRNN
+from nn.basic import LSTM, GRU, CNN, apply_dropout
+from nn.advanced import RCNN, GRNN, StrCNN
 from utils import io_utils
 from utils.io_utils import say
 from utils.eval import Evaluation
@@ -77,6 +78,7 @@ class Model(object):
         # Testing scores #
         ##################
         self.scores = None
+        self.alpha = None
 
     def compile(self):
         self.set_input_format()
@@ -117,6 +119,10 @@ class Model(object):
             layer_type = GRU
         elif args.layer.lower() == "grnn":
             layer_type = GRNN
+        elif args.layer.lower() == "cnn":
+            layer_type = CNN
+        elif args.layer.lower() == "str_cnn":
+            layer_type = StrCNN
 
         ##############
         # Set layers #
@@ -152,7 +158,7 @@ class Model(object):
 
     def set_intermediate_layer(self, args, prev_ht, prev_hb, layers):
         for i in range(args.depth):
-            # len*batch*n_d
+            # 1D: n_words, 2D: batch, 3D: n_d
             ht = layers[i].forward_all(prev_ht)
             hb = layers[i].forward_all(prev_hb)
             prev_ht = ht
@@ -164,10 +170,13 @@ class Model(object):
             hb = self.normalize_3d(hb)
 
         # average over length, ignore paddings
-        # batch * d
+        # 1D: batch, 2D: n_d
         if self.args.average:
             ht = self.average_without_padding(ht, self.idts)
             hb = self.average_without_padding(hb, self.idbs)
+        elif self.args.layer == 'cnn' or self.args.layer == 'str_cnn':
+            ht = self.max_without_padding(ht, self.idts)
+            hb = self.max_without_padding(hb, self.idbs)
         else:
             ht = ht[-1]
             hb = hb[-1]
@@ -288,6 +297,7 @@ class Model(object):
         train_func = theano.function(
             inputs=[self.idts, self.idbs, self.idps],
             outputs=[self.cost, self.loss, gnorm, self.train_scores],
+#            outputs=[self.cost, self.loss, gnorm, self.train_scores, self.alpha],
             updates=updates,
             on_unused_input='ignore'
         )
@@ -338,6 +348,16 @@ class Model(object):
                 idts, idbs, idps = train_batches[i]
 
                 cur_cost, cur_loss, grad_norm, preds = train_func(idts, idbs, idps)
+#                cur_cost, cur_loss, grad_norm, preds, alpha = train_func(idts, idbs, idps)
+
+                if i == 100000000000:
+                    say('NAN: Index %d\n' % i)
+                    say('grad_norm\n%s\n' % str(grad_norm))
+                    say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
+                    say('idts\n%s\n' % str(idts))
+                    say('idps\n%s\n' % str(idps))
+#                    say('alpha\n%s\n' % str(alpha))
+                    exit()
 
                 train_loss += cur_loss
                 train_cost += cur_cost
@@ -409,11 +429,33 @@ class Model(object):
         return x / (l2 + eps)
 
     def average_without_padding(self, x, ids, eps=1e-8):
-        # len*batch*1
+        """
+        :param x: 1D: n_words, 2D: batch, 3D: n_d
+        :param ids: 1D: n_words, 2D: batch, 3D: n_d
+        :return: 1D: batch, 2D: n_d
+        """
+        # 1D: n_words, 2D: batch, 3D: 1
         mask = T.neq(ids, self.padding_id).dimshuffle((0, 1, 'x'))
         mask = T.cast(mask, theano.config.floatX)
-        # batch*d
-        s = T.sum(x * mask, axis=0) / (T.sum(mask, axis=0) + eps)
+        mask = mask.dimshuffle((1, 0, 2))
+        # 1D: batch, 2D: n_d
+        x = x.dimshuffle((1, 0, 2))
+        s = T.sum(x * mask + eps, axis=1) / (T.sum(mask + eps, axis=1) + eps)
+        return s
+
+    def max_without_padding(self, x, ids, eps=1e-8):
+        """
+        :param x: 1D: n_words, 2D: batch, 3D: n_d
+        :param ids: 1D: n_words, 2D: batch, 3D: n_d
+        :return: 1D: batch, 2D: n_d
+        """
+        # 1D: n_words, 2D: batch, 3D: 1
+        mask = T.neq(ids, self.padding_id).dimshuffle((0, 1, 'x'))
+        mask = T.cast(mask, theano.config.floatX)
+        mask = mask.dimshuffle((1, 0, 2))
+        # 1D: batch, 2D: n_d
+        x = x.dimshuffle((1, 0, 2))
+        s = T.max(x * mask + eps, axis=1)
         return s
 
     def evaluate(self, data, eval_func):
