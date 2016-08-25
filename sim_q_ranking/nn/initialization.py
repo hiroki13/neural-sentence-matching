@@ -73,10 +73,13 @@ def set_default_rng_seed(seed):
                             uniform -- uniform distribution with unit variance and zero mean
 '''
 def random_init(size, rng=None, rng_type=None):
-    if rng is None: rng = default_rng
+    if rng is None:
+        rng = default_rng
+
     if rng_type is None:
         #vals = rng.standard_normal(size)
         vals = rng.uniform(low=-0.05, high=0.05, size=size)
+#        vals = rng.uniform(low=-0.1, high=0.1, size=size)
 
     elif rng_type == "normal":
         vals = rng.standard_normal(size)
@@ -92,9 +95,6 @@ def random_init(size, rng=None, rng_type=None):
     return vals.astype(theano.config.floatX)
 
 
-'''
-    return a theano shared variable with initial values as vals
-'''
 def create_shared(vals, name=None):
     return theano.shared(vals, name=name)
 

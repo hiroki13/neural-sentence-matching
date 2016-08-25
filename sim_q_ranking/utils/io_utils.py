@@ -5,7 +5,7 @@ from collections import Counter
 
 import numpy as np
 
-from nn.basic import EmbeddingLayer
+from ..nn.basic import EmbeddingLayer
 
 PAD = '<padding>'
 UNK = '<unk>'

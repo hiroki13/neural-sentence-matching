@@ -2,12 +2,11 @@ import numpy as np
 import theano
 import theano.tensor as T
 
-from model import basic_model
-from nn.initialization import get_activation_by_name
-from nn.basic import LSTM, GRU
-from nn.advanced import RCNN
-from nn.initialization import random_init, create_shared
-from nn.basic import apply_dropout
+from ..model import basic_model
+from ..nn.initialization import get_activation_by_name
+from ..nn.basic import LSTM, GRU
+from ..nn.advanced import RCNN
+from ..nn.basic import apply_dropout
 
 
 class Model(basic_model.Model):
@@ -19,16 +18,16 @@ class Model(basic_model.Model):
         self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
-        self.set_input_layer(idts=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
+        self.set_input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
                              n_e=self.n_e, dropout=self.dropout)
-        self.set_intermediate_layer(args=self.args, prev_ht_l=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
+        self.set_mid_layer(args=self.args, prev_ht_l=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
         self.set_output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
 
         self.set_params(layers=self.layers)
-        self.set_loss(n_d=self.n_d, idps=self.idps, h_final=self.h_final)
+        self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
-        self.set_scores(h_final=self.h_final)
+        self.set_scores(h_o=self.h_final)
 
     def set_layers(self, args, n_d, n_e):
         activation = get_activation_by_name(args.activation)
@@ -63,7 +62,7 @@ class Model(basic_model.Model):
                 )
             self.layers.append(feature_layer)
 
-    def set_intermediate_layer(self, args, prev_ht_l, prev_hb, layers, n_d):
+    def set_mid_layer(self, args, prev_ht_l, prev_hb, layers, n_d):
         # 1D: n_words, 2D: batch, 3D: n_d
         prev_ht_r = prev_ht_l[::-1]
 
@@ -109,9 +108,9 @@ class Model(basic_model.Model):
         h = T.max(h + eps, axis=1)
         return h
 
-    def set_loss(self, n_d, idps, h_final):
+    def set_loss(self, n_d, idps, h_o):
         # 1D: n_queries, 2D: n_cands-1, 3D: 2 * dim_h
-        xp = h_final[idps.ravel()]
+        xp = h_o[idps.ravel()]
         xp = xp.reshape((idps.shape[0], idps.shape[1], 2 * n_d))
 
         if self.args.loss == 'ce':
@@ -134,16 +133,16 @@ class DoubleModel(basic_model.Model):
         self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
-        self.set_input_layer(idts=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
+        self.set_input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
                              n_e=self.n_e, dropout=self.dropout)
-        self.set_intermediate_layer(args=self.args, prev_ht=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
+        self.set_mid_layer(args=self.args, prev_h=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
         self.set_output_layer(args=self.args, ht=self.ht, ht_b=self.ht_b, dropout=self.dropout)
 
         self.set_params(layers=self.layers)
-        self.set_loss(n_d=self.n_d, idps=self.idps, h_final=self.h_final)
+        self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
-        self.set_scores(h_final=self.h_final)
+        self.set_scores(h_o=self.h_final)
 
     def set_layers(self, args, n_d, n_e):
         activation = get_activation_by_name(args.activation)
@@ -173,14 +172,14 @@ class DoubleModel(basic_model.Model):
                 )
             self.layers.append(feature_layer)
 
-    def set_intermediate_layer(self, args, prev_ht, prev_hb, layers, n_d):
-        prev_ht_b = prev_ht[::-1]
+    def set_mid_layer(self, args, prev_h, prev_hb, layers, n_d):
+        prev_ht_b = prev_h[::-1]
 
         for i in range(args.depth):
             # 1D: n_words, 2D: batch_size * n_cands, 3D: n_d
-            ht = layers[i * 2].forward_all(prev_ht)
+            ht = layers[i * 2].forward_all(prev_h)
             ht_b = layers[i * 2 + 1].forward_all(prev_ht_b)
-            prev_ht = ht
+            prev_h = ht
             prev_ht_b = ht_b
 
         if args.normalize:

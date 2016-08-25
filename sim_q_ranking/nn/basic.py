@@ -1,4 +1,5 @@
 import sys
+
 import numpy as np
 import theano
 import theano.tensor as T
@@ -172,25 +173,28 @@ class Layer(object):
     def initialize_params(self, n_in, n_out, activation):
         if USE_XAVIER_INIT:
             if activation == ReLU:
-                scale = np.sqrt(4.0/(n_in+n_out), dtype=theano.config.floatX)
+                scale = np.sqrt(4.0 / (n_in + n_out), dtype=theano.config.floatX)
                 b_vals = np.ones(n_out, dtype=theano.config.floatX) * 0.01
             elif activation == softmax:
-                scale = np.float64(0.001).astype(theano.config.floatX)
+                scale = np.float32(0.001).astype(theano.config.floatX)
                 b_vals = np.zeros(n_out, dtype=theano.config.floatX)
             else:
-                scale = np.sqrt(2.0/(n_in+n_out), dtype=theano.config.floatX)
+                scale = np.sqrt(2.0 / (n_in + n_out), dtype=theano.config.floatX)
                 b_vals = np.zeros(n_out, dtype=theano.config.floatX)
-            W_vals = random_init((n_in,n_out), rng_type="normal") * scale
+            W_vals = random_init((n_in, n_out), rng_type="normal") * scale
         else:
-            W_vals = random_init((n_in,n_out))
+            W_vals = random_init((n_in, n_out))
             if activation == softmax:
                 W_vals *= 0.00
             if activation == ReLU:
                 b_vals = np.ones(n_out, dtype=theano.config.floatX) * 0.01
             else:
                 b_vals = random_init((n_out,))
+
         self.W = create_shared(W_vals, name="W")
-        if self.has_bias: self.b = create_shared(b_vals, name="b")
+
+        if self.has_bias:
+            self.b = create_shared(b_vals, name="b")
 
     def forward(self, x):
         if self.has_bias:
@@ -219,8 +223,6 @@ class RecurrentLayer(Layer):
 
     def create_parameters(self):
         n_in, n_out, activation = self.n_in, self.n_out, self.activation
-
-        # re-use the code in super-class Layer
         self.initialize_params(n_in + n_out, n_out, activation)
 
     def forward(self, x, h):

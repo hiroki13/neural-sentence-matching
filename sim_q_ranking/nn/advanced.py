@@ -93,18 +93,9 @@ class AttentionLayer(Layer):
         n_d = self.n_d
         self.W1_c = create_shared(random_init((n_d, n_d)), name="W1_c")
         self.W1_q = create_shared(random_init((n_d, n_d)), name="W1_h")
-#        self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
-        self.W2_r_a = create_shared(random_init((n_d, n_d)), name="W2_r")
-        self.W2_r_b = create_shared(random_init((n_d, n_d)), name="W2_r")
 
-        if self.a_type == 'bi':
-            self.W = create_shared(random_init((n_d, n_d)), name="W")
-            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.W]
-            self.forward = self.forward_bilinear
-        elif self.a_type == 'ip':
-            self.lst_params = [self.W1_q, self.W1_c, self.W2_r]
-            self.forward = self.forward_inner_product
-        elif self.a_type == 'c':
+        if self.a_type == 'c':
+            self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.W2_h = create_shared(random_init((n_d, n_d)), name="W2_h")
             self.w = create_shared(random_init((n_d,)), name="w")
             self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w, self.W2_h]
@@ -112,11 +103,12 @@ class AttentionLayer(Layer):
         elif self.a_type == 'so':
             self.W2_r_a = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.W2_r_b = create_shared(random_init((n_d, n_d)), name="W2_r")
-            self.w = create_shared(random_init((n_d,)), name="w")
+            self.w_a = create_shared(random_init((n_d,)), name="w")
             self.w_b = create_shared(random_init((n_d,)), name="w_b")
-            self.lst_params = [self.W1_q, self.W1_c, self.W2_r_a, self.W2_r_b, self.w, self.w_b]
+            self.lst_params = [self.W1_q, self.W1_c, self.W2_r_a, self.W2_r_b, self.w_a, self.w_b]
             self.forward = self.forward_second_order
         else:
+            self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.w = create_shared(random_init((n_d,)), name="w")
             self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w]
             self.forward = self.forward_standard
@@ -139,7 +131,7 @@ class AttentionLayer(Layer):
         M = T.tanh(T.dot(Y, self.W1_q).dimshuffle(0, 'x', 1, 2) + T.dot(h, self.W1_c).dimshuffle(0, 1, 'x', 2))
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words
-        M_a = T.dot(M, self.w)
+        M_a = T.dot(M, self.w_a)
         M_a = normalize_3d(M_a)
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words, 4D: 1
@@ -163,13 +155,12 @@ class AttentionLayer(Layer):
         M_a = T.repeat(M_a, dim_h, axis=3)
 
         # 1D: n_words, 2D: dim_h
-        w = self.w.dimshuffle('x', 0)
-        w = T.repeat(w, M.shape[3], axis=0)
-        w = w.dimshuffle((1, 0))
+        w_a = self.w_a.dimshuffle('x', 0)
+        w_a = T.repeat(w_a, M.shape[3], axis=0)
+        w_a = w_a.dimshuffle((1, 0))
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M_tmp = T.dot(M_a, w) / T.square(self.w.norm(2, axis=0))
-        M_b = M - M_tmp
+        M_b = M - T.dot(M_a, w_a) / T.sum(self.w_a ** 2)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         M_b = T.dot(M_b, self.w_b)
@@ -189,94 +180,6 @@ class AttentionLayer(Layer):
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         h_after = T.tanh(T.dot(r_a, self.W2_r_a) + T.dot(r_b, self.W2_r_b))
 
-        return h_after
-
-    def forward_bilinear(self, query, cands, mask=None, eps=1e-8):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :param eps: float
-        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        """
-
-        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
-        M_q = T.dot(query, self.W1_q).dimshuffle((0, 'x', 1, 2))
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M_q = T.repeat(M_q, repeats=cands.shape[1], axis=1)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: 1, 4D: dim_h
-        M_c = T.dot(cands, self.W1_c).dimshuffle((0, 1, 'x', 2))
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M_c = T.repeat(M_c, repeats=query.shape[1], axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M = T.dot(M_q, self.W)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        M = T.tanh(T.sum(M * M_c, axis=3))
-        M = normalize_3d(M)
-
-        # 1D: n_queries * (n_cands-1), 2D: n_words
-        M = M.reshape((M.shape[0] * M.shape[1], M.shape[2]))
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        alpha = T.nnet.softmax(M)
-        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
-
-        if mask is not None:
-            if mask.dtype != theano.config.floatX:
-                mask = T.cast(mask, theano.config.floatX)
-            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
-            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        r = T.sum(query.dimshuffle((0, 'x', 1, 2)) * alpha, axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        h_after = T.tanh(T.dot(r, self.W2_r))
-        return h_after
-#        return h_after, alpha.reshape((alpha.shape[0]*alpha.shape[1], alpha.shape[2]))
-
-    def forward_inner_product(self, query, cands, mask=None, eps=1e-8):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :param eps: float
-        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        """
-
-        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
-        M_q = T.tanh(T.dot(query, self.W1_q)).dimshuffle((0, 'x', 1, 2))
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M_q = T.repeat(M_q, repeats=cands.shape[1], axis=1)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: 1, 4D: dim_h
-        M_c = T.tanh(T.dot(cands, self.W1_c)).dimshuffle((0, 1, 'x', 2))
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M_c = T.repeat(M_c, repeats=query.shape[1], axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        M = T.tanh(T.sum(M_q * M_c, axis=3))
-        # 1D: n_queries * (n_cands-1), 2D: n_words
-        M = M.reshape((M.shape[0] * M.shape[1], M.shape[2]))
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
-        alpha = T.nnet.softmax(M)
-        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
-
-        if mask is not None:
-            if mask.dtype != theano.config.floatX:
-                mask = T.cast(mask, theano.config.floatX)
-            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
-            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        r = T.sum(query.dimshuffle((0, 'x', 1, 2)) * alpha, axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        h_after = T.tanh(T.dot(r, self.W2_r))
         return h_after
 
     def forward_standard(self, query, cands, mask=None, eps=1e-8):
@@ -312,8 +215,8 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         h_after = T.tanh(T.dot(r, self.W2_r))
+
         return h_after
-#        return h_after, alpha.reshape((alpha.shape[0]*alpha.shape[1], alpha.shape[2]))
 
     def forward_standard_c(self, query, C, mask=None, eps=1e-8):
         """
@@ -348,7 +251,7 @@ class AttentionLayer(Layer):
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         C = C.dimshuffle((2, 0, 1, 3))[-1]
         h_after = T.tanh(T.dot(C, self.W2_h) + T.dot(r, self.W2_r))
-#        return h_after, alpha.reshape((alpha.shape[0]*alpha.shape[1], alpha.shape[2]))
+
         return h_after
 
     @property
@@ -533,6 +436,7 @@ class RCNN(Layer):
 
 
 class StrCNN(Layer):
+
     def __init__(self, n_in, n_out, activation=None, decay=0.0, order=2, use_all_grams=True):
         self.n_in = n_in
         self.n_out = n_out

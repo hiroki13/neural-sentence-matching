@@ -46,6 +46,9 @@ if __name__ == "__main__":
     argparser.add_argument("--beta", type=float, default=0.9)
     argparser.add_argument("--a_type", type=str, default='st')
     argparser.add_argument("--share_w", type=int, default=0)
+    argparser.add_argument("--ranking", type=int, default=0)
+    argparser.add_argument("--sim", type=int, default=0)
+    argparser.add_argument("--fix", type=int, default=0)
 
     args = argparser.parse_args()
     print
