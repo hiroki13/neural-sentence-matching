@@ -12,6 +12,7 @@ from ..nn.initialization import get_activation_by_name
 from ..nn.optimization import create_optimization_updates
 from ..nn.basic import LSTM, GRU, CNN, apply_dropout
 from ..nn.advanced import RCNN, GRNN, StrCNN
+from ..nn.nn_utils import hinge_loss, cross_entropy_loss, normalize_2d, normalize_3d, average_without_padding
 from ..utils.io_utils import say, read_annotations, create_batches
 from ..utils.eval import Evaluation
 
@@ -23,9 +24,6 @@ class Model(object):
     def __init__(self, args, emb_layer):
         self.args = args
 
-        ##########
-        # Layers #
-        ##########
         self.emb_layer = emb_layer
         self.layers = []
         self.params = []
@@ -42,9 +40,11 @@ class Model(object):
         ###################
         # Input variables #
         ###################
-        self.idts = None
-        self.idbs = None
-        self.idps = None
+        # 1D: n_words, 2D: batch * n_cands
+        self.idts = T.imatrix()
+        self.idbs = T.imatrix()
+        # 1D: batch, 2D: n_cands
+        self.idps = T.imatrix()
 
         ###########################################################################################
         # Example idps: C0=Query_id, C1=Positive q_id, C2-20=Negative q_ids                       #
@@ -68,39 +68,44 @@ class Model(object):
         # Testing scores #
         ##################
         self.train_scores = None
-        self.scores = None
+        self.predict_scores = None
 
     def compile(self):
         args = self.args
 
-        self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
+        ###########
+        # Network #
+        ###########
         xt = self.set_input_layer(ids=self.idts)
-        ht = self.set_mid_layer(prev_h=xt, ids=self.idts)
+        ht = self.set_mid_layer(prev_h=xt, ids=self.idts, padding_id=self.padding_id)
 
         if args.body:
             xb = self.set_input_layer(ids=self.idbs)
-            hb = self.set_mid_layer(prev_h=xb, ids=self.idbs)
+            hb = self.set_mid_layer(prev_h=xb, ids=self.idbs, padding_id=self.padding_id)
             ht = (ht + hb) * 0.5
 
-        h_o = self.set_output_layer(ht=ht)
+        h = self.set_output_layer(h=ht)
 
+        #########
+        # Score #
+        #########
+        # The first one in each batch is a query, the rest are candidate questions
+        self.predict_scores = self.get_predict_scores(h)
+
+        # The first one in each batch is a positive sample, the rest are negative ones
+        scores = self.get_scores(h, self.idps)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        self.train_scores = T.argmax(scores, axis=1)
+
+        ##########################
+        # Set training objective #
+        ##########################
         self.set_params(layers=self.layers)
-        self.set_loss(idps=self.idps, h_o=h_o)
+        self.set_loss(scores, pos_scores, neg_scores)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
-
-        self.set_scores(h_o=h_o)
-
-    def set_input_format(self):
-        # len(title) * batch
-        self.idts = T.imatrix()
-
-        # len(body) * batch
-        self.idbs = T.imatrix()
-
-        # num queries * candidate size
-        self.idps = T.imatrix()
 
     def set_layers(self, args, n_d, n_e):
         activation = get_activation_by_name(args.activation)
@@ -108,9 +113,7 @@ class Model(object):
         ##################
         # Set layer type #
         ##################
-        if args.layer.lower() == "rcnn":
-            layer_type = RCNN
-        elif args.layer.lower() == "lstm":
+        if args.layer.lower() == "lstm":
             layer_type = LSTM
         elif args.layer.lower() == "gru":
             layer_type = GRU
@@ -120,6 +123,8 @@ class Model(object):
             layer_type = CNN
         elif args.layer.lower() == "str_cnn":
             layer_type = StrCNN
+        else:
+            layer_type = RCNN
 
         ##############
         # Set layers #
@@ -153,11 +158,10 @@ class Model(object):
         # 1D: n_words * n_queries * batch, 2D: n_e
         xt = self.emb_layer.forward(ids.ravel())
         # 1D: n_words, 2D: n_queries * batch, 3D: n_e
-        xt = xt.reshape((ids.shape[0], ids.shape[1], self.n_e))
-        xt = apply_dropout(xt, self.dropout)
-        return xt
+        xt = xt.reshape((ids.shape[0], ids.shape[1], -1))
+        return apply_dropout(xt, self.dropout)
 
-    def set_mid_layer(self, prev_h, ids):
+    def set_mid_layer(self, prev_h, ids, padding_id):
         args = self.args
 
         for i in range(args.depth):
@@ -165,61 +169,48 @@ class Model(object):
             h = self.layers[i].forward_all(prev_h)
             prev_h = h
 
-        # normalize vectors
         if args.normalize:
-            h = self.normalize_3d(h)
+            h = normalize_3d(h)
 
         # 1D: batch, 2D: n_d
-        if self.args.average:
-            h = self.average_without_padding(h, ids)
+        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
+            h = average_without_padding(h, ids, padding_id)
         else:
             h = h[-1]
 
         return h
 
-    def set_output_layer(self, ht):
+    def set_output_layer(self, h):
         # 1D: n_queries * n_cands, 2D: dim_h
-        h_o = apply_dropout(ht, self.dropout)
-        return self.normalize_2d(h_o)
+        h = apply_dropout(h, self.dropout)
+        return normalize_2d(h)
 
     def set_params(self, layers):
         for l in layers:
             self.params += l.params
         say("num of parameters: {}\n".format(sum(len(x.get_value(borrow=True).ravel()) for x in self.params)))
 
-    def set_loss(self, idps, h_o):
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        xp = h_o[idps.ravel()]
-        xp = xp.reshape((idps.shape[0], idps.shape[1], -1))
+    def get_scores(self, h, idps):
+        h = h[idps.ravel()]
+        h = h.reshape((idps.shape[0], idps.shape[1], -1))
 
-        if self.args.loss == 'ce':
-            self.cross_entropy(xp)
+        # 1D: n_queries, 2D: 1, 3D: n_d
+        query_vecs = h[:, 0, :].dimshuffle((0, 'x', 1))
+        # 1D: n_queries, 2D: n_cands, 3D: n_d
+        cand_vecs = h[:, 1:, :]
+        # 1D: n_queries, 2D: n_cands
+        scores = T.sum(query_vecs * cand_vecs, axis=2)
+        return scores
+
+    def get_predict_scores(self, h):
+        # first one in batch is query, the rest are candidate questions
+        return T.dot(h[1:], h[0])
+
+    def set_loss(self, scores, pos_scores, neg_scores):
+        if self.args.loss == 1:
+            self.loss = cross_entropy_loss(scores)
         else:
-            self.max_margin(xp)
-
-    def cross_entropy(self, xp):
-        # num query * n_d
-        query_vecs = xp[:, 0, :]  # 3D -> 2D
-        # 1D: n_queries, 2D: n_cands
-        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
-        probs = T.nnet.softmax(scores)
-
-        self.train_scores = T.argmax(scores, axis=1)
-        self.loss = - T.mean(T.log(probs[:, 0]))
-
-    def max_margin(self, xp):
-        # 1D: n_queries, 2D: n_d
-        query_vecs = xp[:, 0, :]  # 3D -> 2D
-
-        # 1D: n_queries, 2D: n_cands
-        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * xp[:, 1:, :], axis=2)
-        pos_scores = scores[:, 0]
-        neg_scores = scores[:, 1:]
-        neg_scores = T.max(neg_scores, axis=1)
-
-        diff = neg_scores - pos_scores + 1.0
-        self.loss = T.mean((diff > 0) * diff)
-        self.train_scores = T.argmax(scores, axis=1)
+            self.loss = hinge_loss(pos_scores, neg_scores)
 
     def set_cost(self, args, params, loss):
         l2_reg = None
@@ -230,10 +221,6 @@ class Model(object):
                 l2_reg += p.norm(2)
         self.cost = loss + l2_reg * args.l2_reg
 
-    def set_scores(self, h_o):
-        # first one in batch is query, the rest are candidate questions
-        self.scores = T.dot(h_o[1:], h_o[0])
-
     def get_pnorm_stat(self):
         lst_norms = []
         for p in self.params:
@@ -241,48 +228,6 @@ class Model(object):
             l2 = np.linalg.norm(vals)
             lst_norms.append("{:.3f}".format(l2))
         return lst_norms
-
-    def normalize_2d(self, x, eps=1e-8):
-        # x is batch*d
-        # l2 is batch*1
-        l2 = x.norm(2, axis=1).dimshuffle((0, 'x'))
-        return x / (l2 + eps)
-
-    def normalize_3d(self, x, eps=1e-8):
-        # x is len*batch*d
-        # l2 is len*batch*1
-        l2 = x.norm(2, axis=2).dimshuffle((0, 1, 'x'))
-        return x / (l2 + eps)
-
-    def average_without_padding(self, x, ids, eps=1e-8):
-        """
-        :param x: 1D: n_words, 2D: batch, 3D: n_d
-        :param ids: 1D: n_words, 2D: batch, 3D: n_d
-        :return: 1D: batch, 2D: n_d
-        """
-        # 1D: n_words, 2D: batch, 3D: 1
-        mask = T.neq(ids, self.padding_id).dimshuffle((0, 1, 'x'))
-        mask = T.cast(mask, theano.config.floatX)
-        mask = mask.dimshuffle((1, 0, 2))
-        # 1D: batch, 2D: n_d
-        x = x.dimshuffle((1, 0, 2))
-        s = T.sum(x * mask + eps, axis=1) / (T.sum(mask + eps, axis=1) + eps)
-        return s
-
-    def max_without_padding(self, x, ids, eps=1e-8):
-        """
-        :param x: 1D: n_words, 2D: batch, 3D: n_d
-        :param ids: 1D: n_words, 2D: batch, 3D: n_d
-        :return: 1D: batch, 2D: n_d
-        """
-        # 1D: n_words, 2D: batch, 3D: 1
-        mask = T.neq(ids, self.padding_id).dimshuffle((0, 1, 'x'))
-        mask = T.cast(mask, theano.config.floatX)
-        mask = mask.dimshuffle((1, 0, 2))
-        # 1D: batch, 2D: n_d
-        x = x.dimshuffle((1, 0, 2))
-        s = T.max(x * mask + eps, axis=1)
-        return s
 
     def load_pretrained_parameters(self, args):
         with gzip.open(args.load_pretrain) as fin:
@@ -361,7 +306,7 @@ class Model(object):
 
         eval_func = theano.function(
             inputs=[self.idts, self.idbs],
-            outputs=self.scores,
+            outputs=self.predict_scores,
             on_unused_input='ignore'
         )
 
@@ -396,7 +341,6 @@ class Model(object):
             for i in xrange(n_train_batches):
                 # get current batch
                 idts, idbs, idps = train_batches[i]
-
                 cur_cost, cur_loss, grad_norm, preds = train_func(idts, idbs, idps)
 
                 if math.isnan(cur_loss):

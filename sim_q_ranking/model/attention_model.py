@@ -1,8 +1,5 @@
-import gzip
 import time
 import math
-import gc
-import cPickle as pickle
 
 from prettytable import PrettyTable
 import numpy as np
@@ -13,6 +10,7 @@ import basic_model
 from ..nn.advanced import AttentionLayer
 from ..nn.optimization import create_optimization_updates
 from ..nn.basic import apply_dropout
+from ..nn.nn_utils import normalize_3d, average_without_padding
 from ..utils.io_utils import say, read_annotations, create_batches
 from ..utils.eval import Evaluation
 
@@ -23,21 +21,48 @@ class Model(basic_model.Model):
         super(Model, self).__init__(args, emb_layer)
 
     def compile(self):
-        self.set_input_format()
+        args = self.args
+
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
-        if not self.args.fix:
-            self.set_params(layers=self.layers)
+        self.set_attention_layer()
 
+        ###########
+        # Network #
+        ###########
         xt = self.set_input_layer(ids=self.idts)
-        ht = self.set_mid_layer(prev_h=xt)
-        h_a = self.set_attention_layer(idts=self.idts, idps=self.idps, ht=ht)
-        h_o = self.set_output_layer(h=ht[-1])
+        ht, ht_all = self.set_mid_layer(prev_h=xt, ids=self.idts, padding_id=self.padding_id)
+        ht_a = self.attention(h=ht_all, ids=self.idts, idps=self.idps)
 
-        self.set_loss(ids=self.idps, h_o=h_o, h_a=h_a)
+        if args.body:
+            xb = self.set_input_layer(ids=self.idbs)
+            hb, hb_all = self.set_mid_layer(prev_h=xb, ids=self.idbs, padding_id=self.padding_id)
+            hb_a = self.attention(h=hb_all, ids=self.idbs, idps=self.idps)
+
+            ht = (ht + hb) * 0.5
+            ht_a = (ht_a + hb_a) * 0.5
+
+        h = self.set_output_layer(h=ht)
+
+        #########
+        # Score #
+        #########
+        # The first one in each batch is a query, the rest are candidate questions
+        self.predict_scores = self.get_predict_scores(h, ht_a)
+
+        # The first one in each batch is a positive sample, the rest are negative ones
+        scores = self.get_scores(h, ht_a, self.idps)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        self.train_scores = T.argmax(scores, axis=1)
+
+        ##########################
+        # Set training objective #
+        ##########################
+        self.set_params(layers=self.layers)
+        self.set_loss(scores, pos_scores, neg_scores)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
-        self.set_scores(h_o=h_o, h_a=h_a)
 
-    def set_mid_layer(self, prev_h):
+    def set_mid_layer(self, prev_h, ids, padding_id):
         args = self.args
 
         for i in range(args.depth):
@@ -46,65 +71,25 @@ class Model(basic_model.Model):
             prev_h = ht
 
         if args.normalize:
-            ht = self.normalize_3d(ht)
+            ht = normalize_3d(ht)
+
+        # 1D: batch, 2D: n_d
+        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
+            h = average_without_padding(ht, ids, padding_id)
+        else:
+            h = ht[-1]
 
         # 1D: n_words, 2D: n_queries * n_cands, 3D: n_d
-        return ht
+        return h, ht
 
-    def set_attention_layer(self, idts, idps, ht):
-        args = self.args
+    def set_attention_layer(self):
+        attention_layer = AttentionLayer(a_type=self.args.a_type, n_d=self.n_d, activation=self.activation)
+        self.layers.append(attention_layer)
 
-        attention_layer = AttentionLayer(a_type=args.a_type, n_d=self.n_d, activation=self.activation)
-#        self.layers.append(attention_layer)
-        self.params += attention_layer.params
-
-        if args.a_type == 'c':
-            attention = self.attention_c
-        else:
-            attention = self.attention
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        h_a = attention(layer=attention_layer, h=ht, idps=idps, n_d=self.n_d, ids=idts)
-#        h_a, self.alpha = attention(layer=attention_layer, h=ht, idps=idps, n_d=self.n_d, ids=idts)
-#        h_a = apply_dropout(h_a, self.dropout)
-        return self.normalize_3d(h_a)
-
-    def set_output_layer(self, h):
-        # 1D: n_queries * n_cands, 2D: dim_h
-        h_o = apply_dropout(h, self.dropout)
-        return self.normalize_2d(h_o)
-
-    def set_loss(self, ids, h_o, h_a):
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        xp = h_o[ids.ravel()]
-        xp = xp.reshape((ids.shape[0], ids.shape[1], -1))
-
-        query_vecs = xp[:, 0, :]
-#        cand_vecs = (xp[:, 1:, :] + h_a) * 0.5
-        cand_vecs = xp[:, 1:, :] + h_a
-
-        scores = T.sum(query_vecs.dimshuffle((0, 'x', 1)) * cand_vecs, axis=2)
-        pos_scores = scores[:, 0]
-        neg_scores = scores[:, 1:]
-        neg_scores = T.max(neg_scores, axis=1)
-
-        diff = neg_scores - pos_scores + 1.0
-        self.loss = T.mean((diff > 0) * diff)
-        self.train_scores = T.argmax(scores, axis=1)
-
-    def set_scores(self, h_o, h_a):
-        # h_o: 1D: n_cands, 2D: dim_h
-        h_a = h_a.reshape((h_a.shape[0] * h_a.shape[1], h_a.shape[2]))
-#        cand_vecs = (h_o[1:] + h_a) * 0.5
-        cand_vecs = h_o[1:] + h_a
-        self.scores = T.dot(cand_vecs, h_o[0])
-
-    def attention(self, layer, h, idps, n_d, ids):
+    def attention(self, h, idps, ids):
         """
-        :param layer:
         :param h: 1D: n_words, 2D: n_queries * n_cands, 3D: dim_h
         :param idps: 1D: n_queries, 2D: n_cands (zero-padded)
-        :param n_d: float32
         :param ids: 1D: n_words, 2D: batch_size * n_cands
         :return: 1D: 1D: n_queries, 2D: n_cands, 3D: dim_h
         """
@@ -117,7 +102,7 @@ class Model(basic_model.Model):
         ids = ids[:, idps.ravel()]
 
         # C, ids: 1D: n_queries, 2D: n_cands-1, 3D: n_d
-        C = cands.reshape((idps.shape[0], idps.shape[1], n_d))[:, 1:]
+        C = cands.reshape((idps.shape[0], idps.shape[1], -1))[:, 1:]
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         ids = ids.reshape((ids.shape[0], idps.shape[0], idps.shape[1])).dimshuffle(1, 2, 0)[:, 0]
@@ -129,57 +114,36 @@ class Model(basic_model.Model):
         #################
         # query: 1D: n_queries, 2D: n_words, 3D: n_d
         q = h[:, idps.ravel()]
-        query = q.reshape((q.shape[0], idps.shape[0], idps.shape[1], n_d)).dimshuffle((1, 2, 0, 3))[:, 0, :, :]
+        query = q.reshape((q.shape[0], idps.shape[0], idps.shape[1], -1)).dimshuffle((1, 2, 0, 3))[:, 0, :, :]
 
-        return layer.forward(query, C, mask)
-#        return layer.forward(query, C)
+        h_a = self.layers[-1].forward(query, C, mask)
+        h_a = apply_dropout(h_a, self.dropout)
+        return normalize_3d(h_a)
 
-    def attention_c(self, layer, h, idps, n_d, ids):
-        """
-        :param layer:
-        :param h: 1D: n_words, 2D: n_queries * n_cands, 3D: dim_h
-        :param idps: 1D: n_queries, 2D: n_cands (zero-padded)
-        :param n_d: float32
-        :param ids: 1D: n_words, 2D: n_queries * n_cands
-        :return: 1D: 1D: n_queries, 2D: n_cands, 3D: dim_h
-        """
+    def get_scores(self, h, h_a, idps):
+        h = h[idps.ravel()]
+        h = h.reshape((idps.shape[0], idps.shape[1], -1))
 
-        #####################
-        # Contexts and Mask #
-        #####################
-        # 1D: n_words, 1D: n_queries * n_cands, 3D: dim_h
-        c = h[:, idps.ravel()]
-        # C, ids: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_d
-        C = c.reshape((ids.shape[0], idps.shape[0], idps.shape[1], n_d)).dimshuffle((1, 2, 0, 3))[:, 1:]
+        # 1D: n_queries, 2D: 1, 3D: n_d
+        query_vecs = h[:, 0, :].dimshuffle((0, 'x', 1))
+        # 1D: n_queries, 2D: n_cands, 3D: n_d
+        cand_vecs = (h[:, 1:, :] + h_a) * 0.5
+        # 1D: n_queries, 2D: n_cands
+        scores = T.sum(query_vecs * cand_vecs, axis=2)
+        return scores
 
-        #################
-        # Query vectors #
-        #################
-        # 1D: n_queries * n_cands, 2D: n_d
-        q = h[-1, idps.ravel()]
-        # 1D: n_queries, 2D: n_d
-        query = q.reshape((idps.shape[0], idps.shape[1], n_d))[:, 0]
-
-        ########
-        # Mask #
-        ########
-        # 1D: n_words, 2D: n_queries * n_cands
-        ids = ids[:, idps.ravel()]
-        # 1D: n_queries, 3D: n_cands, 3D: n_words
-        ids = ids.reshape((ids.shape[0], idps.shape[0], idps.shape[1])).dimshuffle(1, 2, 0)[:, 1:]
-        mask = T.neq(ids, self.padding_id)
-
-        return layer.forward(query, C, mask)
+    def get_predict_scores(self, h, h_a):
+        # h: 1D: n_cands, 2D: dim_h
+        h_a = h_a.reshape((h_a.shape[0] * h_a.shape[1], h_a.shape[2]))
+        cand_vecs = (h[1:] + h_a) * 0.5
+        return T.dot(cand_vecs, h[0])
 
     def evaluate(self, data, eval_func):
         res = []
         for idts, idbs, labels in data:
             # idts, idbs: 1D: n_words, 2D: n_cands
-            if self.args.attention:
-                idps = np.asarray([[i for i in xrange(idts.shape[1])]], dtype='int32')
-                scores = eval_func(idts, idbs, idps)
-            else:
-                scores = eval_func(idts, idbs)
+            idps = np.asarray([[i for i in xrange(idts.shape[1])]], dtype='int32')
+            scores = eval_func(idts, idbs, idps)
 
             assert len(scores) == len(labels)
             ranks = (-scores).argsort()
@@ -218,14 +182,13 @@ class Model(basic_model.Model):
         train_func = theano.function(
             inputs=[self.idts, self.idbs, self.idps],
             outputs=[self.cost, self.loss, gnorm, self.train_scores],
-#            outputs=[self.cost, self.loss, gnorm, self.train_scores, self.alpha],
             updates=updates,
             on_unused_input='ignore'
         )
 
         eval_func = theano.function(
             inputs=[self.idts, self.idbs, self.idps],
-            outputs=self.scores,
+            outputs=self.predict_scores,
             on_unused_input='ignore'
         )
 
@@ -258,17 +221,9 @@ class Model(basic_model.Model):
             ttl = 0.
 
             for i in xrange(n_train_batches):
-                if epoch == 0:
-                    break
-
                 # get current batch
                 idts, idbs, idps = train_batches[i]
-
                 cur_cost, cur_loss, grad_norm, preds = train_func(idts, idbs, idps)
-#                cur_cost, cur_loss, grad_norm, preds, alpha = train_func(idts, idbs, idps)
-
-#                if i == 0:
-#                    print alpha
 
                 if math.isnan(cur_loss):
                     say('\n\nNAN: Index: %d\n' % i)
@@ -325,14 +280,3 @@ class Model(basic_model.Model):
             say("\n")
             say("{}".format(result_table))
             say("\n")
-
-            gc.collect()
-
-    def load_pretrained_parameters(self, args):
-        with gzip.open(args.load_pretrain) as fin:
-            data = pickle.load(fin)
-            assert args.hidden_dim == data["d"]
-            for i, p in enumerate(data["params"]):
-                l = self.layers[i]
-                l.params = p
-

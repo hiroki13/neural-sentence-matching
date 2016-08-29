@@ -2,7 +2,7 @@ import time
 
 from ..utils import say, read_corpus, load_embedding_iterator, get_emb_layer, map_corpus, read_annotations,\
     create_eval_batches, create_batches
-from ..model import attention_model, basic_model, bidirectional_model, grnn_model, ranking_model
+from ..model import attention_model, basic_model, bidirectional_model, grnn_model, ranking_model, alignment_model
 
 PAD = "<padding>"
 
@@ -66,6 +66,9 @@ def train(args):
             elif args.ranking:
                 model = ranking_model.Model(args, emb_layer)
                 say('\nModel: Ranking Model\n')
+            elif args.al:
+                model = alignment_model.Model(args, emb_layer)
+                say('\nModel: Alignment Model\n')
             else:
                 if args.layer == 'grnn':
                     model = grnn_model.Model(args, emb_layer)

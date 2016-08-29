@@ -81,6 +81,60 @@ class GRNN(Layer):
         return [param for param in self.lst_params]
 
 
+class AlignmentLayer(Layer):
+
+    def __init__(self, n_e, n_d, activation):
+        self.n_e = n_e
+        self.n_d = n_d
+        self.activation = activation
+        self.create_parameters()
+
+    def create_parameters(self):
+        n_e = self.n_e
+        n_d = self.n_d
+#        self.W1_c = create_shared(random_init((n_e, n_d)), name="W1_c")
+        self.W1_q = create_shared(random_init((n_e, n_d)), name="W1_h")
+#        self.lst_params = [self.W1_q, self.W1_c]
+        self.lst_params = [self.W1_q]
+
+    def alignment(self, query, cands, mask=None):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
+        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        """
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M = T.sum(query.dimshuffle(0, 'x', 1, 2) * cands, axis=3)
+
+        if mask is not None:
+            if mask.dtype != theano.config.floatX:
+                mask = T.cast(mask, theano.config.floatX)
+            M = M * mask.dimshuffle((0, 1, 2, 'x'))
+
+        return M
+
+#    def linear(self, x, y):
+#        return T.tanh(T.dot(x, self.W1_q) + T.dot(y, self.W1_c))
+
+    def linear(self, x):
+        return T.tanh(T.dot(x, self.W1_q))
+
+    def bilinear(self, x, y):
+        return T.tanh(T.sum(T.dot(x, self.W1_q) * y, axis=2))
+
+    @property
+    def params(self):
+        return self.lst_params
+
+    @params.setter
+    def params(self, param_list):
+        assert len(param_list) == len(self.lst_params)
+        for p, q in zip(self.lst_params, param_list):
+            p.set_value(q.get_value())
+
+
 class AttentionLayer(Layer):
     def __init__(self, a_type, n_d, activation):
         self.a_type = a_type
@@ -94,13 +148,7 @@ class AttentionLayer(Layer):
         self.W1_c = create_shared(random_init((n_d, n_d)), name="W1_c")
         self.W1_q = create_shared(random_init((n_d, n_d)), name="W1_h")
 
-        if self.a_type == 'c':
-            self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
-            self.W2_h = create_shared(random_init((n_d, n_d)), name="W2_h")
-            self.w = create_shared(random_init((n_d,)), name="w")
-            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w, self.W2_h]
-            self.forward = self.forward_standard_c
-        elif self.a_type == 'so':
+        if self.a_type == 'so':
             self.W2_r_a = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.W2_r_b = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.w_a = create_shared(random_init((n_d,)), name="w")
@@ -132,7 +180,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words
         M_a = T.dot(M, self.w_a)
-        M_a = normalize_3d(M_a)
+#        M_a = normalize_3d(M_a)
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words, 4D: 1
         alpha = T.nnet.softmax(M_a.reshape((n_queries * n_cands, n_words)))
@@ -164,7 +212,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         M_b = T.dot(M_b, self.w_b)
-        M_b = normalize_3d(M_b)
+#        M_b = normalize_3d(M_b)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
         beta = T.nnet.softmax(M_b.reshape((n_queries * n_cands, n_words)))
@@ -196,7 +244,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         u = T.dot(M, self.w)
-        u = normalize_3d(u)
+#        u = normalize_3d(u)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
         alpha = T.nnet.softmax(u.reshape((cands.shape[0] * cands.shape[1], query.shape[1])))
@@ -215,42 +263,6 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         h_after = T.tanh(T.dot(r, self.W2_r))
-
-        return h_after
-
-    def forward_standard_c(self, query, C, mask=None, eps=1e-8):
-        """
-        :param query: 1D: n_queries, 2D: dim_h
-        :param C: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :param mask: 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        :param eps: float
-        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        """
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M = T.tanh(T.dot(query, self.W1_q).dimshuffle((0, 'x', 'x', 1)) + T.dot(C, self.W1_c))
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        u = T.dot(M, self.w)
-        u = normalize_3d(u)
-        u = u.reshape((C.shape[0] * C.shape[1], C.shape[2]))
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
-        alpha = T.nnet.softmax(u)
-        alpha = alpha.reshape((C.shape[0], C.shape[1], C.shape[2], 1))
-
-        if mask is not None:
-            if mask.dtype != theano.config.floatX:
-                mask = T.cast(mask, theano.config.floatX)
-            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
-            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        r = T.sum(C * alpha, axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        C = C.dimshuffle((2, 0, 1, 3))[-1]
-        h_after = T.tanh(T.dot(C, self.W2_h) + T.dot(r, self.W2_r))
 
         return h_after
 

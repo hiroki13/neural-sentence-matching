@@ -28,13 +28,13 @@ class Model(basic_model.Model):
 
         self.set_output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
 
-        self.set_scores(h_o=self.h_final, idps=self.idps, n_d=self.n_d)
+        self.get_predict_scores(h=self.h_final, idps=self.idps, n_d=self.n_d)
 
         self.set_params(layers=self.layers)
-        self.set_loss(scores=self.scores)
+        self.set_loss(scores=self.predict_scores)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
-    def set_scores(self, h_o, idps, n_d):
+    def get_predict_scores(self, h, idps, n_d):
         sim_option = self.args.sim
         if sim_option == 1:
             score_f = self.set_softmax
@@ -43,7 +43,7 @@ class Model(basic_model.Model):
         else:
             score_f = self.set_sigmoid
 
-        score_f(h_o, idps, n_d)
+        score_f(h, idps, n_d)
 
     def set_softmax(self, h_final, idps, n_d):
         W = self.initialize_params(n_d, n_d, self.activation)
@@ -57,7 +57,7 @@ class Model(basic_model.Model):
         query_vecs = xp[:, 0, :]  # 3D -> 2D
         cand_vecs = xp[:, 1:, :]
 
-        self.scores = T.nnet.softmax(T.sum(T.dot(query_vecs, W).dimshuffle((0, 'x', 1)) * cand_vecs, axis=2))
+        self.predict_scores = T.nnet.softmax(T.sum(T.dot(query_vecs, W).dimshuffle((0, 'x', 1)) * cand_vecs, axis=2))
 
     def set_softmax_conc(self, h_final, idps, n_d):
         W = create_shared(random_init((2 * n_d,)), name="w")
@@ -75,7 +75,7 @@ class Model(basic_model.Model):
         query_vecs = T.repeat(query_vecs.dimshuffle((0, 'x', 1)), cand_vecs.shape[1], axis=1)
         vecs = T.concatenate([query_vecs, cand_vecs], axis=2)
 
-        self.scores = T.nnet.softmax(T.dot(vecs, W))
+        self.predict_scores = T.nnet.softmax(T.dot(vecs, W))
 
     def set_sigmoid(self, h_final, idps, n_d):
         W = self.initialize_params(n_d, n_d, self.activation)
@@ -89,7 +89,7 @@ class Model(basic_model.Model):
         query_vecs = xp[:, 0, :]  # 3D -> 2D
         cand_vecs = xp[:, 1:, :]
 
-        self.scores = T.nnet.sigmoid(T.sum(T.dot(query_vecs, W).dimshuffle((0, 'x', 1)) * cand_vecs, axis=2))
+        self.predict_scores = T.nnet.sigmoid(T.sum(T.dot(query_vecs, W).dimshuffle((0, 'x', 1)) * cand_vecs, axis=2))
 
     def set_loss(self, scores):
         self.train_scores = T.argmax(scores, axis=1)
@@ -154,7 +154,7 @@ class Model(basic_model.Model):
 
         eval_func = theano.function(
             inputs=[self.idts, self.idbs, self.idps],
-            outputs=self.scores,
+            outputs=self.predict_scores,
             on_unused_input='ignore'
         )
 

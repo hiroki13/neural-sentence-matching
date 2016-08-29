@@ -9,11 +9,6 @@ from initialization import random_init, create_shared
 from initialization import ReLU, sigmoid, tanh, softmax, linear
 
 
-def say(s, stream=sys.stdout):
-    stream.write(s)
-    stream.flush()
-
-
 class Dropout(object):
 
     def __init__(self, dropout_prob, srng=None, v2=False):
@@ -71,6 +66,12 @@ class EmbeddingLayer(object):
 
             say("{} pre-trained embeddings loaded.\n".format(len(emb_vals)))
 
+            ###########################
+            # Set special vocab vecs  #
+            # vocab = [UNK, PAD]      #
+            # UNK is the zero vec     #
+            # PAD is not the zero vec #
+            ###########################
             for word in vocab:
                 if word not in vocab_map:
                     vocab_map[word] = len(vocab_map)
@@ -435,4 +436,8 @@ class CNN(Layer):
             start = end
         self.bias.set_value(param_list[-1].get_value())
 
+
+def say(s, stream=sys.stdout):
+    stream.write(s)
+    stream.flush()
 

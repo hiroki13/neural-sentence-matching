@@ -27,7 +27,7 @@ class Model(basic_model.Model):
         self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
-        self.set_scores(h_o=self.h_final)
+        self.get_predict_scores(h=self.h_final)
 
     def set_layers(self, args, n_d, n_e):
         activation = get_activation_by_name(args.activation)
@@ -120,7 +120,7 @@ class Model(basic_model.Model):
         elif self.args.loss == 'hbs':
             self.hard_bootstrapping(xp, self.args.beta)
         else:
-            self.max_margin(xp)
+            self.hinge_loss(xp)
 
 
 class DoubleModel(basic_model.Model):
@@ -142,7 +142,7 @@ class DoubleModel(basic_model.Model):
         self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
         self.set_cost(args=self.args, params=self.params, loss=self.loss)
 
-        self.set_scores(h_o=self.h_final)
+        self.get_predict_scores(h=self.h_final)
 
     def set_layers(self, args, n_d, n_e):
         activation = get_activation_by_name(args.activation)
