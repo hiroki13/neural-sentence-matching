@@ -60,15 +60,14 @@ def get_emb_layer(raw_corpus, n_d, embs=None, cut_off=2, unk=UNK, padding=PAD, f
     return embedding_layer
 
 
-def map_corpus(raw_corpus, embedding_layer, max_len=100):
+def map_corpus(raw_corpus, embedding_layer, filter_oov, max_len=100):
     ids_corpus = {}
-    for id, pair in raw_corpus.iteritems():
-        item = (embedding_layer.map_to_ids(pair[0], filter_oov=True),
-                embedding_layer.map_to_ids(pair[1], filter_oov=True)[:max_len])
-        # if len(item[0]) == 0:
-        #    say("empty title after mapping to IDs. Doc No.{}\n".format(id))
-        #    continue
-        ids_corpus[id] = item
+    for q_id, pair in raw_corpus.iteritems():
+        item = (embedding_layer.map_to_ids(pair[0], filter_oov=filter_oov),
+                embedding_layer.map_to_ids(pair[1], filter_oov=filter_oov)[:max_len])
+        if len(item[0]) == 0:
+            say("empty title after mapping to IDs. Doc No.{}\n".format(q_id))
+        ids_corpus[q_id] = item
     return ids_corpus
 
 
@@ -232,17 +231,17 @@ def create_eval_batches(ids_corpus, data, padding_id, pad_left):
     return lst
 
 
-def create_one_batch(titles, bodies, padding_id, pad_left):
-    max_title_len = max(1, max(len(x) for x in titles))
+def create_one_batch(titles1, bodies, padding_id, pad_left):
+    max_title_len = max(1, max(len(x) for x in titles1))
     max_body_len = max(1, max(len(x) for x in bodies))
     if pad_left:
         titles = np.column_stack([np.pad(x, (max_title_len - len(x), 0), 'constant',
-                                         constant_values=padding_id) for x in titles])
+                                         constant_values=padding_id) for x in titles1])
         bodies = np.column_stack([np.pad(x, (max_body_len - len(x), 0), 'constant',
                                          constant_values=padding_id) for x in bodies])
     else:
         titles = np.column_stack([np.pad(x, (0, max_title_len - len(x)), 'constant',
-                                         constant_values=padding_id) for x in titles])
+                                         constant_values=padding_id) for x in titles1])
         bodies = np.column_stack([np.pad(x, (0, max_body_len - len(x)), 'constant',
                                          constant_values=padding_id) for x in bodies])
     return titles, bodies

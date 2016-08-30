@@ -8,7 +8,7 @@ PAD = "<padding>"
 
 
 def train(args):
-    say('\n\tSENTENCE MATCHING SYSTEM START\n\n')
+    say('\n\tSENTENCE MATCHING START\n\n')
 
     ##############
     # Load files #
@@ -22,7 +22,7 @@ def train(args):
     # Set the vocabulary #
     ######################
     emb_layer = get_emb_layer(raw_corpus=raw_corpus, n_d=args.hidden_dim, cut_off=args.cut_off, embs=embs)
-    ids_corpus = map_corpus(raw_corpus, emb_layer, max_len=args.max_seq_len)
+    ids_corpus = map_corpus(raw_corpus, emb_layer, filter_oov=args.filter_oov, max_len=args.max_seq_len)
     say("vocab size={}, corpus size={}\n".format(emb_layer.n_V, len(raw_corpus)))
     padding_id = emb_layer.vocab_map[PAD]
 

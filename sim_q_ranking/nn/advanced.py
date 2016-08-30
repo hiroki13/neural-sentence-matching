@@ -148,7 +148,7 @@ class AttentionLayer(Layer):
         self.W1_c = create_shared(random_init((n_d, n_d)), name="W1_c")
         self.W1_q = create_shared(random_init((n_d, n_d)), name="W1_h")
 
-        if self.a_type == 'so':
+        if self.a_type > 1:
             self.W2_r_a = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.W2_r_b = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.w_a = create_shared(random_init((n_d,)), name="w")
@@ -180,7 +180,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words
         M_a = T.dot(M, self.w_a)
-#        M_a = normalize_3d(M_a)
+        M_a = normalize_3d(M_a)
 
         # 1D: n_queries, 2D: n_cands, 3D: n_words, 4D: 1
         alpha = T.nnet.softmax(M_a.reshape((n_queries * n_cands, n_words)))
@@ -212,7 +212,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         M_b = T.dot(M_b, self.w_b)
-#        M_b = normalize_3d(M_b)
+        M_b = normalize_3d(M_b)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
         beta = T.nnet.softmax(M_b.reshape((n_queries * n_cands, n_words)))
@@ -244,7 +244,7 @@ class AttentionLayer(Layer):
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
         u = T.dot(M, self.w)
-#        u = normalize_3d(u)
+        u = normalize_3d(u)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
         alpha = T.nnet.softmax(u.reshape((cands.shape[0] * cands.shape[1], query.shape[1])))

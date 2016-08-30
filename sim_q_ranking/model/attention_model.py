@@ -83,7 +83,7 @@ class Model(basic_model.Model):
         return h, ht
 
     def set_attention_layer(self):
-        attention_layer = AttentionLayer(a_type=self.args.a_type, n_d=self.n_d, activation=self.activation)
+        attention_layer = AttentionLayer(a_type=self.args.attention, n_d=self.n_d, activation=self.activation)
         self.layers.append(attention_layer)
 
     def attention(self, h, idps, ids):
@@ -99,14 +99,21 @@ class Model(basic_model.Model):
         #####################
         # cands, ids: 1D: n_queries * n_cands, 3D: dim_h
         cands = h[-1, idps.ravel()]
-        ids = ids[:, idps.ravel()]
+#        ids = ids[:, idps.ravel()]
+
+        # 1D: n_queries * n_cands, 2D: n_words
+        ids = ids.dimshuffle((1, 0))
+        # 1D: n_queries * n_cands, 2D: n_words
+        ids = ids[idps.ravel()]
 
         # C, ids: 1D: n_queries, 2D: n_cands-1, 3D: n_d
         C = cands.reshape((idps.shape[0], idps.shape[1], -1))[:, 1:]
 
         # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        ids = ids.reshape((ids.shape[0], idps.shape[0], idps.shape[1])).dimshuffle(1, 2, 0)[:, 0]
+#        ids = ids.reshape((ids.shape[0], idps.shape[0], idps.shape[1])).dimshuffle(1, 2, 0)[:, 0]
+        ids = ids.reshape((idps.shape[0], idps.shape[1], -1))[:, 0]
         mask = T.neq(ids, self.padding_id)
+        self.mask = mask
         mask = mask.dimshuffle((0, 'x', 1))
 
         #################
@@ -279,4 +286,112 @@ class Model(basic_model.Model):
 
             say("\n")
             say("{}".format(result_table))
+            say("\n")
+
+    def train2(self, ids_corpus, dev=None, test=None):
+        say('\nBuilding functions...\n\n')
+
+        args = self.args
+
+        batch_size = args.batch_size
+        padding_id = self.padding_id
+
+        ############################
+        # Set the update procedure #
+        ############################
+        updates, lr, gnorm = create_optimization_updates(
+            cost=self.cost,
+            params=self.params,
+            lr=args.learning_rate,
+            method=args.learning
+        )[:3]
+
+        #####################
+        # Set the functions #
+        #####################
+        train_func = theano.function(
+            inputs=[self.idts, self.idbs, self.idps],
+            outputs=[self.cost, self.loss, gnorm, self.train_scores, self.mask],
+            updates=updates,
+            on_unused_input='ignore'
+        )
+
+        say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
+
+        unchanged = 0
+        best_dev = -1
+
+        dev_MAP = dev_MRR = dev_P1 = dev_P5 = 0
+        test_MAP = test_MRR = test_P1 = test_P5 = 0
+        max_epoch = args.max_epoch
+
+        for epoch in xrange(max_epoch):
+            unchanged += 1
+            if unchanged > 15:
+                break
+
+            start_time = time.time()
+
+            train = read_annotations(args.train, data_size=args.data_size)
+            train_batches = create_batches(ids_corpus, train, batch_size, padding_id, pad_left=not args.average)
+            n_train_batches = len(train_batches)
+
+            train_loss = 0.0
+            train_cost = 0.0
+            crr = 0.
+            ttl = 0.
+
+            for i in xrange(n_train_batches):
+                if i < 180:
+                    continue
+
+                # get current batch
+                idts, idbs, idps = train_batches[i]
+                cur_cost, cur_loss, grad_norm, preds, mask = train_func(idts, idbs, idps)
+
+                if math.isnan(cur_loss):
+                    say('\n\nNAN: Index: %d\n' % i)
+                    """
+                    for p in idts.T:
+                        print p[-1]
+                    print
+                    for m in mask:
+                        print m
+                    print
+                    """
+                    say('Cost: %f  Loss: %f  G_norm: %f\n' % (cur_cost, cur_loss, float(grad_norm)))
+                    exit()
+
+                """
+                for p in idts.T:
+                    print p[-1]
+                print
+                for m in mask:
+                    print m
+                print
+                say('Cost: %f  Loss: %f  G_norm: %f\n' % (cur_cost, cur_loss, float(grad_norm)))
+                """
+
+                train_loss += cur_loss
+                train_cost += cur_cost
+
+                crr += len([s for s in preds if s == 0])
+                ttl += len(preds)
+
+                if i % 10 == 0:
+                    say("\r{}/{}".format(i, n_train_batches))
+
+                if i == n_train_batches - 1:
+                    say("\r\n\n")
+                    say(("Epoch {}\tcost={:.3f}\tloss={:.3f}" + "\tMRR={:.2f},{:.2f}\t|g|={:.8f}\t[{:.3f}m]\n").format(
+                        epoch,
+                        train_cost / (i + 1),
+                        train_loss / (i + 1),
+                        dev_MRR,
+                        best_dev,
+                        float(grad_norm),
+                        (time.time() - start_time) / 60.0))
+                    say("\tTrain Accuracy: %f (%d/%d)\n" % (crr / ttl, crr, ttl))
+                    say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
+
             say("\n")

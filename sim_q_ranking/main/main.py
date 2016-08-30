@@ -49,6 +49,7 @@ if __name__ == "__main__":
     argparser.add_argument("--ranking", type=int, default=0)
     argparser.add_argument("--sim", type=int, default=0)
     argparser.add_argument("--al", type=int, default=0)
+    argparser.add_argument("--filter_oov", type=int, default=1)
 
     args = argparser.parse_args()
     print

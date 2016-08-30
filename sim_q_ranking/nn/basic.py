@@ -115,7 +115,7 @@ class EmbeddingLayer(object):
         n_V, lst_words = self.n_V, self.lst_words
         return [lst_words[i] if i < n_V else "<err>" for i in ids]
 
-    def map_to_ids(self, words, filter_oov=False):
+    def map_to_ids(self, words, filter_oov):
         """
         :param words: the list of string tokens
         :param filter_oov: whether to remove oov tokens in the returned array
