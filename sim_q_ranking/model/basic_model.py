@@ -78,27 +78,26 @@ class Model(object):
         ###########
         # Network #
         ###########
-        xt = self.set_input_layer(ids=self.idts)
-        ht = self.set_mid_layer(prev_h=xt, ids=self.idts, padding_id=self.padding_id)
+        xt = self.input_layer(ids=self.idts)
+        ht = self.mid_layer(prev_h=xt, ids=self.idts, padding_id=self.padding_id)
 
         if args.body:
-            xb = self.set_input_layer(ids=self.idbs)
-            hb = self.set_mid_layer(prev_h=xb, ids=self.idbs, padding_id=self.padding_id)
-            ht = (ht + hb) * 0.5
+            xb = self.input_layer(ids=self.idbs)
+            hb = self.mid_layer(prev_h=xb, ids=self.idbs, padding_id=self.padding_id)
+        else:
+            hb = None
 
-        h = self.set_output_layer(h=ht)
+        query_vecs, cand_vecs = self.output_layer(ht=ht, hb=hb, idps=self.idps)
 
         #########
         # Score #
         #########
-        # The first one in each batch is a query, the rest are candidate questions
-        self.predict_scores = self.get_predict_scores(h)
-
         # The first one in each batch is a positive sample, the rest are negative ones
-        scores = self.get_scores(h, self.idps)
+        scores = self.get_scores(query_vecs, cand_vecs)
         pos_scores = scores[:, 0]
         neg_scores = scores[:, 1:]
         self.train_scores = T.argmax(scores, axis=1)
+        self.predict_scores = scores[0]
 
         ##########################
         # Set training objective #
@@ -154,14 +153,14 @@ class Model(object):
                 )
             self.layers.append(feature_layer)
 
-    def set_input_layer(self, ids):
+    def input_layer(self, ids):
         # 1D: n_words * n_queries * batch, 2D: n_e
         xt = self.emb_layer.forward(ids.ravel())
         # 1D: n_words, 2D: n_queries * batch, 3D: n_e
         xt = xt.reshape((ids.shape[0], ids.shape[1], -1))
         return apply_dropout(xt, self.dropout)
 
-    def set_mid_layer(self, prev_h, ids, padding_id):
+    def mid_layer(self, prev_h, ids, padding_id):
         args = self.args
 
         for i in range(args.depth):
@@ -180,31 +179,33 @@ class Model(object):
 
         return h
 
-    def set_output_layer(self, h):
+    def output_layer(self, ht, hb, idps):
         # 1D: n_queries * n_cands, 2D: dim_h
+        if self.args.body:
+            h = (ht + hb) * 0.5
+        else:
+            h = ht
+
         h = apply_dropout(h, self.dropout)
-        return normalize_2d(h)
+        h = normalize_2d(h)
+
+        # 1D: n_queries, 2D: n_cands, 3D: n_d
+        h = h[idps.ravel()]
+        h = h.reshape((idps.shape[0], idps.shape[1], -1))
+
+        query_vecs = h[:, 0, :]
+        cand_vecs = h[:, 1:, :]
+
+        return query_vecs, cand_vecs
+
+    def get_scores(self, query_vecs, cand_vecs):
+        # 1D: n_queries, 2D: n_cands
+        return T.sum(cand_vecs * query_vecs.dimshuffle(0, 'x', 1), axis=2)
 
     def set_params(self, layers):
         for l in layers:
             self.params += l.params
         say("num of parameters: {}\n".format(sum(len(x.get_value(borrow=True).ravel()) for x in self.params)))
-
-    def get_scores(self, h, idps):
-        h = h[idps.ravel()]
-        h = h.reshape((idps.shape[0], idps.shape[1], -1))
-
-        # 1D: n_queries, 2D: 1, 3D: n_d
-        query_vecs = h[:, 0, :].dimshuffle((0, 'x', 1))
-        # 1D: n_queries, 2D: n_cands, 3D: n_d
-        cand_vecs = h[:, 1:, :]
-        # 1D: n_queries, 2D: n_cands
-        scores = T.sum(query_vecs * cand_vecs, axis=2)
-        return scores
-
-    def get_predict_scores(self, h):
-        # first one in batch is query, the rest are candidate questions
-        return T.dot(h[1:], h[0])
 
     def set_loss(self, scores, pos_scores, neg_scores):
         if self.args.loss == 1:
@@ -257,11 +258,8 @@ class Model(object):
         res = []
         for idts, idbs, labels in data:
             # idts, idbs: 1D: n_words, 2D: n_cands
-            if self.args.attention:
-                idps = np.asarray([[i for i in xrange(idts.shape[1])]], dtype='int32')
-                scores = eval_func(idts, idbs, idps)
-            else:
-                scores = eval_func(idts, idbs)
+            idps = np.asarray([[i for i in xrange(idts.shape[1])]], dtype='int32')
+            scores = eval_func(idts, idbs, idps)
 
             assert len(scores) == len(labels)
             ranks = (-scores).argsort()
@@ -305,7 +303,7 @@ class Model(object):
         )
 
         eval_func = theano.function(
-            inputs=[self.idts, self.idbs],
+            inputs=[self.idts, self.idbs, self.idps],
             outputs=self.predict_scores,
             on_unused_input='ignore'
         )

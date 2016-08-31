@@ -166,7 +166,6 @@ class AttentionLayer(Layer):
         :param Y: 1D: n_queries, 2D: n_words, 3D: dim_h
         :param h: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :param eps: float
         :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         """
 
@@ -235,7 +234,6 @@ class AttentionLayer(Layer):
         :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
         :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :param eps: float
         :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
         """
 
@@ -265,6 +263,34 @@ class AttentionLayer(Layer):
         h_after = T.tanh(T.dot(r, self.W2_r))
 
         return h_after
+
+    def alignment_matrix(self, query, cands):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
+        """
+        q = T.dot(query, self.W1_q).dimshuffle(0, 'x', 'x', 1, 2)
+        c = T.dot(cands, self.W1_c).dimshuffle(0, 1, 2, 'x', 3)
+        return T.sum(q * c, axis=4)
+
+    def vector_composition(self, query, cands):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words, 5D: dim_h
+        """
+        q = T.dot(query, self.W1_q).dimshuffle(0, 'x', 'x', 1, 2)
+        c = T.dot(cands, self.W1_c).dimshuffle(0, 1, 2, 'x', 3)
+        return q + c
+
+    def alignment_vecs(self, a_matrix, vecs):
+        """
+        :param a_matrix: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
+        :param vecs: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        :return:
+        """
+        return
 
     @property
     def params(self):

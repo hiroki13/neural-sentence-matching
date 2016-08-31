@@ -18,10 +18,10 @@ class Model(basic_model.Model):
         self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
-        self.set_input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
-                             n_e=self.n_e, dropout=self.dropout)
-        self.set_mid_layer(args=self.args, prev_ht_l=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
-        self.set_output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
+        self.input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
+                         n_e=self.n_e, dropout=self.dropout)
+        self.mid_layer(args=self.args, prev_ht_l=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
+        self.output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
 
         self.set_params(layers=self.layers)
         self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
@@ -62,7 +62,7 @@ class Model(basic_model.Model):
                 )
             self.layers.append(feature_layer)
 
-    def set_mid_layer(self, args, prev_ht_l, prev_hb, layers, n_d):
+    def mid_layer(self, args, prev_ht_l, prev_hb, layers, n_d):
         # 1D: n_words, 2D: batch, 3D: n_d
         prev_ht_r = prev_ht_l[::-1]
 
@@ -133,10 +133,10 @@ class DoubleModel(basic_model.Model):
         self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
-        self.set_input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
-                             n_e=self.n_e, dropout=self.dropout)
-        self.set_mid_layer(args=self.args, prev_h=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
-        self.set_output_layer(args=self.args, ht=self.ht, ht_b=self.ht_b, dropout=self.dropout)
+        self.input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
+                         n_e=self.n_e, dropout=self.dropout)
+        self.mid_layer(args=self.args, prev_h=self.xt, prev_hb=self.xb, layers=self.layers, n_d=self.n_d)
+        self.output_layer(args=self.args, ht=self.ht, ht_b=self.ht_b, dropout=self.dropout)
 
         self.set_params(layers=self.layers)
         self.set_loss(n_d=self.n_d, idps=self.idps, h_o=self.h_final)
@@ -172,7 +172,7 @@ class DoubleModel(basic_model.Model):
                 )
             self.layers.append(feature_layer)
 
-    def set_mid_layer(self, args, prev_h, prev_hb, layers, n_d):
+    def mid_layer(self, args, prev_h, prev_hb, layers, n_d):
         prev_ht_b = prev_h[::-1]
 
         for i in range(args.depth):
@@ -189,7 +189,7 @@ class DoubleModel(basic_model.Model):
         self.ht = ht[-1]
         self.ht_b = ht_b[-1]
 
-    def set_output_layer(self, args, ht, ht_b, dropout):
+    def output_layer(self, args, ht, ht_b, dropout):
         alpha = theano.shared(np.asarray(np.random.uniform(low=-1., high=1.), dtype=theano.config.floatX))
         self.params.append(alpha)
 

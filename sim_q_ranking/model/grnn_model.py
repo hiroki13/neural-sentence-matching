@@ -6,7 +6,7 @@ class Model(basic_model.Model):
     def __init__(self, args, emb_layer):
         super(Model, self).__init__(args, emb_layer)
 
-    def set_mid_layer(self, args, prev_h, prev_hb, layers):
+    def mid_layer(self, args, prev_h, prev_hb, layers):
         prev_h = prev_h.dimshuffle((1, 0, 2))
         prev_hb = prev_hb.dimshuffle((1, 0, 2))
 

@@ -22,11 +22,11 @@ class Model(basic_model.Model):
         self.set_input_format()
         self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
 
-        self.set_input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
-                             n_e=self.n_e, dropout=self.dropout)
-        self.set_mid_layer(args=self.args, prev_h=self.xt, prev_hb=self.xb, layers=self.layers)
+        self.input_layer(ids=self.idts, idbs=self.idbs, embedding_layer=self.emb_layer,
+                         n_e=self.n_e, dropout=self.dropout)
+        self.mid_layer(args=self.args, prev_h=self.xt, prev_hb=self.xb, layers=self.layers)
 
-        self.set_output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
+        self.output_layer(args=self.args, ht=self.ht, hb=self.hb, dropout=self.dropout)
 
         self.get_predict_scores(h=self.h_final, idps=self.idps, n_d=self.n_d)
 

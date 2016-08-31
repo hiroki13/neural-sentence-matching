@@ -381,6 +381,11 @@ class CNN(Layer):
         self.bias = create_shared(random_init((n_out,)), name="bias")
 
     def forward(self, x, hc):
+        """
+        :param x: 1D: batch, 2D: self.n_in
+        :param hc: 1D: batch, 2D: self.n_out * (self.order+1)
+        :return:
+        """
         order, n_in, n_out, activation = self.order, self.n_in, self.n_out, self.activation
         layers = self.internal_layers
         if hc.ndim > 1:
@@ -391,9 +396,9 @@ class CNN(Layer):
         lst = []
         for i in range(order):
             if hc.ndim > 1:
-                c_i_tm1 = hc[:, n_out*i:n_out*i+n_out]
+                c_i_tm1 = hc[:, n_out * i: n_out * i + n_out]
             else:
-                c_i_tm1 = hc[n_out*i:n_out*i+n_out]
+                c_i_tm1 = hc[n_out * i: n_out * i + n_out]
             if i == 0:
                 c_i_t = layers[i].forward(x)
             else:

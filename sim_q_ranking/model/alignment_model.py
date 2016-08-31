@@ -30,9 +30,9 @@ class Model(basic_model.Model):
 
         self.set_input_format()
 
-        xt = self.set_input_layer(ids=self.idts)
+        xt = self.input_layer(ids=self.idts)
 #        query, ht1, ht2 = self.set_mid_layer(prev_h=xt, idps=self.idps)
-        query, ht1 = self.set_mid_layer(prev_h=xt, idps=self.idps)
+        query, ht1 = self.mid_layer(prev_h=xt, idps=self.idps)
 #        h_o = self.set_output_layer(ht1, ht2)
 #        h_o = self.set_output_layer(ht1)
 
@@ -42,7 +42,7 @@ class Model(basic_model.Model):
         self.set_loss(scores)
         self.set_cost(args=args, params=self.params, loss=self.loss)
 
-    def set_mid_layer(self, prev_h, idps):
+    def mid_layer(self, prev_h, idps):
         # 1D: batch * n_cands, 2D: n_words, 3D: n_e
         prev_h = prev_h.dimshuffle((1, 0, 2))
 
@@ -87,7 +87,7 @@ class Model(basic_model.Model):
         return query, vec
     """
 
-    def set_output_layer(self, h1):
+    def output_layer(self, h1):
         # 1D: batch, 2D: n_cands-1, 3D: n_d
 #        h_o = T.max(self.layers[-1].linear(h1, h2), axis=2)
         h_o = T.max(self.layers[-1].linear(h1), axis=2)
