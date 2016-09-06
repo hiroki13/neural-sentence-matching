@@ -24,19 +24,6 @@ class TestAttention(unittest.TestCase):
             w = self.layer.params[i].get_value(borrow=True)
             self.layer.params[i].set_value(np.ones(shape=w.shape, dtype='float32'))
 
-    def test_alignment_matrix(self):
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
-        y = self.layer.alignment_matrix(query, cands)
-        self.f = theano.function(inputs=[query, cands], outputs=[y], on_unused_input='ignore')
-        print
-        print self.f(q, c)
-
-    def test_vector_composition(self):
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
-        y = self.layer.vector_composition(query, cands)
-        self.f = theano.function(inputs=[query, cands], outputs=[y], on_unused_input='ignore')
-        print
-        print self.f(q, c)
 
 if __name__ == '__main__':
     unittest.main()

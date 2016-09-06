@@ -47,3 +47,16 @@ def average_without_padding(x, ids, padding_id, eps=1e-8):
     # 1D: batch, 2D: n_d
     return T.sum(x * mask, axis=0) / (T.sum(mask, axis=0) + eps)
 
+
+def k_max_pooling(x, k, axis):
+    x = T.sort(x, axis=axis)
+    return x[:, -k:]
+
+
+def euclid_dist(x, y, axis):
+    return T.exp(- T.sum((x - y) ** 2, axis=axis))
+
+
+def cosine_sim(x, y, axis):
+    return T.sum(x * y, axis-1) / (x.norm(2, axis) * y.norm(2, axis))
+

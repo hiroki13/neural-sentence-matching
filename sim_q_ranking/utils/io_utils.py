@@ -65,8 +65,8 @@ def map_corpus(raw_corpus, embedding_layer, filter_oov, max_len=100):
     for q_id, pair in raw_corpus.iteritems():
         item = (embedding_layer.map_to_ids(pair[0], filter_oov=filter_oov),
                 embedding_layer.map_to_ids(pair[1], filter_oov=filter_oov)[:max_len])
-        if len(item[0]) == 0:
-            say("empty title after mapping to IDs. Doc No.{}\n".format(q_id))
+#        if len(item[0]) == 0:
+#            say("empty title after mapping to IDs. Doc No.{}\n".format(q_id))
         ids_corpus[q_id] = item
     return ids_corpus
 

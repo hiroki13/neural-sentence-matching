@@ -1,7 +1,7 @@
 import theano.tensor as T
 
 import basic_model
-from ..nn.advanced import AttentionLayer
+from ..nn.advanced import AttentionLayer, AlignmentLayer
 from ..nn.basic import apply_dropout
 from ..nn.nn_utils import normalize_2d, normalize_3d, average_without_padding
 
@@ -136,3 +136,138 @@ class Model(basic_model.Model):
         cand_vecs = normalize_3d(cand_vecs)
 
         return query_vecs, cand_vecs
+
+
+class AllWordModel(basic_model.Model):
+
+    def __init__(self, args, emb_layer):
+        super(AllWordModel, self).__init__(args, emb_layer)
+
+    def compile(self):
+        args = self.args
+
+        self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
+        self.set_attention_layer()
+
+        ###########
+        # Network #
+        ###########
+        xt = self.input_layer(ids=self.idts)
+        ht, ht_all = self.mid_layer(prev_h=xt, ids=self.idts, padding_id=self.padding_id)
+        query, cands, ht_a = self.attention(h=ht_all, ids=self.idts, idps=self.idps)
+
+        if args.body:
+            xb = self.input_layer(ids=self.idbs)
+            hb, hb_all = self.mid_layer(prev_h=xb, ids=self.idbs, padding_id=self.padding_id)
+            hb_a = self.attention(h=hb_all, ids=self.idbs, idps=self.idps)
+        else:
+            hb = None
+            hb_a = None
+
+        query_vecs, cand_vecs = self.output_layer(query, cands, self.idts, self.idps, ht_a)
+
+        #########
+        # Score #
+        #########
+        # The first one in each batch is a positive sample, the rest are negative ones
+        scores = self.get_scores(query_vecs, cand_vecs)
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        self.train_scores = T.argmax(scores, axis=1)
+        self.predict_scores = scores[0]
+
+        ##########################
+        # Set training objective #
+        ##########################
+        self.set_params(layers=self.layers)
+        self.set_loss(scores, pos_scores, neg_scores)
+        self.set_cost(args=self.args, params=self.params, loss=self.loss)
+
+    def set_attention_layer(self):
+        attention_layer = AlignmentLayer(n_e=self.n_d, n_d=self.n_d, activation=self.activation)
+        self.layers.append(attention_layer)
+
+    def mid_layer(self, prev_h, ids, padding_id):
+        args = self.args
+
+        for i in range(args.depth):
+            # 1D: n_words, 2D: n_queries * n_cands, 3D: n_d
+            ht = self.layers[i].forward_all(prev_h)
+            prev_h = ht
+
+        if args.normalize:
+            ht = normalize_3d(ht)
+
+        # 1D: batch, 2D: n_d
+        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
+            h = average_without_padding(ht, ids, padding_id)
+        else:
+            h = ht[-1]
+
+        # 1D: n_words, 2D: n_queries * n_cands, 3D: n_d
+        return h, ht
+
+    def attention(self, h, idps, ids):
+        """
+        :param h: 1D: n_words, 2D: n_queries * n_cands, 3D: dim_h
+        :param idps: 1D: n_queries, 2D: n_cands (zero-padded)
+        :param ids: 1D: n_words, 2D: batch_size * n_cands
+        :return: 1D: 1D: n_queries, 2D: n_cands, 3D: dim_h
+        """
+
+        #################
+        # Query vectors #
+        #################
+        # query: 1D: n_queries, 2D: n_words, 3D: n_d
+        q = h[:, idps.ravel()]
+        q = q.reshape((q.shape[0], idps.shape[0], idps.shape[1], -1)).dimshuffle((1, 2, 0, 3))
+
+        # 1D: n_queries, 2D: n_words, 3D: n_d
+        query = q[:, 0]
+        # 1D: n_queries, 2D: n_cands, 3D: n_words, 4D: n_d
+        cands = q[:, 1:]
+
+        # 1D: n_queries, 2D: n_cands, 3D: n_words (cands), 4D: n_words (query)
+        A = self.layers[-1].alignment_matrix(query, cands)
+        return query, cands, A
+
+    def output_layer(self, query, cands, ids, idps, A):
+        """
+        :param A: 1D: n_queries, 2D: n_cands, 3D: n_words (cands), 4D: n_words (query)
+        :return:
+        """
+        ########
+        # Mask #
+        ########
+        # 1D: n_queries * n_cands, 2D: n_words
+        ids = ids.dimshuffle((1, 0))
+        # 1D: n_queries * n_cands, 2D: n_words
+        ids = ids[idps.ravel()]
+        # 1D: n_queries, 2D: n_cands, 3D: n_words
+        ids = ids.reshape((idps.shape[0], idps.shape[1], -1))
+        mask = T.neq(ids, self.padding_id)
+
+        # 1D: n_queries, 2D: 1, 3D: 1, 4D: n_words
+        mask_q = mask[:, 0].dimshuffle(0, 'x', 'x', 1)
+        # 1D: n_queries, 2D: n_cands, 3D: n_words, 4D: 1
+        mask_c = mask[:, 1:].dimshuffle(0, 1, 2, 'x')
+
+        A = A * mask_q
+        A = A * mask_c
+
+        # 1D: n_queries, 2D: n_cands, 3D: n_words (query)
+        Z_q = T.max(A, axis=2)
+        # 1D: n_queries, 2D: n_cands, 3D: 1
+        Z_q = T.max(Z_q, axis=2, keepdims=True)
+
+        # 1D: n_queries, 2D: n_cands, 3D: n_words (cands)
+        Z_c = T.max(A, axis=3)
+        # 1D: n_queries, 2D: n_cands, 3D: 1
+        Z_c = T.max(Z_c, axis=2, keepdims=True)
+
+        return Z_q, Z_c
+
+    def get_scores(self, query_vecs, cand_vecs):
+        # 1D: n_queries, 2D: n_cands
+        Z = T.concatenate([query_vecs, cand_vecs], axis=2)
+        return self.layers[-1].inner_product(Z)

@@ -7,80 +7,6 @@ from initialization import tanh, linear, sigmoid, ReLU
 from basic import Layer, RecurrentLayer
 
 
-class GRNN(Layer):
-    def __init__(self, n_in, n_out, activation=tanh, order=1, has_outgate=False, mode=1, clip_gradients=False):
-        self.n_in = n_in
-        self.n_out = n_out
-        self.activation = activation
-        self.order = order
-        self.clip_gradients = clip_gradients
-        self.has_outgate = has_outgate
-        self.has_bias = False
-        self.mode = mode
-        self.create_parameters()
-
-    def create_parameters(self):
-        self.W_e = create_shared(random_init((self.n_in, self.n_out)), name="W_e")
-        self.W = create_shared(random_init((self.n_out * 2, self.n_out)), name="W")
-        self.U = theano.shared(random_init((self.n_out * 3, self.n_out * 3)), name="U")
-        self.G = theano.shared(random_init((self.n_out * 2, self.n_out * 2)), name="G")
-        self.lst_params = [self.W_e, self.W, self.G, self.U]
-
-    def forward(self, x, eps=1e-8):
-        x = tanh(T.dot(x, self.W_e))
-        zero = T.zeros(shape=(x.shape[0], x.shape[1], self.n_out), dtype=theano.config.floatX)
-
-        def recursive(t, m):
-            def step(_t, _m):
-                h_l = _m[:, _t]
-                h_r = _m[:, _t + 1]
-
-                # 1D: batch, 2D: 2 * n_d
-                r = sigmoid(T.dot(T.concatenate([h_l, h_r], axis=1), self.G))
-                half = r.shape[1] / 2
-                # 1D: batch, 2D: n_d
-                r_l = r[:, :half]
-                r_r = r[:, half:]
-
-                # 1D: batch, 2D: n_d
-                h_hat = tanh(T.dot(T.concatenate([r_l * h_l, r_r * h_r], axis=1), self.W))
-
-                # 1D: batch, 2D: 3 * n_d
-                z_hat = T.exp(T.dot(T.concatenate([h_hat, h_l, h_r], axis=1), self.U))
-                # 1D: batch, 2D: 3 (h_hat, h_l, h_r), 3D: n_d
-                z_hat = z_hat.reshape((z_hat.shape[0], 3, z_hat.shape[1] / 3))
-
-                # 1D: batch, 2D: n_d
-                Z = T.sum(z_hat, axis=1)
-                # 1D: batch, 2D: 3, 3D: n_d
-                Z = T.repeat(Z, repeats=3, axis=1).reshape((Z.shape[0], Z.shape[1], 3)).dimshuffle((0, 2, 1))
-
-                z = z_hat / Z + eps
-
-                h = h_hat * z[:, 0] + h_l * z[:, 1] + h_r * z[:, 2]
-                seq_sub_tensor = h
-
-                return _m, seq_sub_tensor
-
-            [_, u], _ = theano.scan(fn=step,
-                                    sequences=T.arange(m.shape[1] - t - 1),
-                                    outputs_info=[m, None])
-
-            return T.set_subtensor(zero[:, :m.shape[1] - t - 1], u.dimshuffle((1, 0, 2)))
-
-        # x: 1D: batch, 2D: n_words, 3D: n_d
-        # y: 1D: n_words -1, 2D: batch, 3D: n_words, 4D: n_d
-        y, _ = theano.scan(fn=recursive,
-                           sequences=T.arange(x.shape[1] - 1),
-                           outputs_info=x)
-
-        return y[-1][:, 0]
-
-    @property
-    def params(self):
-        return [param for param in self.lst_params]
-
-
 class AlignmentLayer(Layer):
 
     def __init__(self, n_e, n_d, activation):
@@ -92,37 +18,51 @@ class AlignmentLayer(Layer):
     def create_parameters(self):
         n_e = self.n_e
         n_d = self.n_d
-#        self.W1_c = create_shared(random_init((n_e, n_d)), name="W1_c")
-        self.W1_q = create_shared(random_init((n_e, n_d)), name="W1_h")
-#        self.lst_params = [self.W1_q, self.W1_c]
-        self.lst_params = [self.W1_q]
+#        self.W_a = create_shared(random_init((n_e, n_d)), name="W1_c")
+#        self.W_x = create_shared(random_init((n_e, n_d)), name="W1_h")
+#        self.W_y = create_shared(random_init((n_e, n_d)), name="W1_h")
+        self.w = create_shared(random_init((2,)), name="w")
+#        self.lst_params = [self.W_a, self.W_x, self.W_y, self.w]
+        self.lst_params = [self.w]
 
-    def alignment(self, query, cands, mask=None):
+    def alignment_matrix(self, query, cands):
         """
         :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
         :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
         """
+#        q = T.dot(query, self.W_a).dimshuffle(0, 'x', 'x', 1, 2)
+#        c = T.dot(cands, self.W_a).dimshuffle(0, 1, 2, 'x', 3)
+        q = query.dimshuffle(0, 'x', 'x', 1, 2)
+        c = cands.dimshuffle(0, 1, 2, 'x', 3)
+        return T.sum(q * c, axis=4)
 
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M = T.sum(query.dimshuffle(0, 'x', 1, 2) * cands, axis=3)
-
-        if mask is not None:
-            if mask.dtype != theano.config.floatX:
-                mask = T.cast(mask, theano.config.floatX)
-            M = M * mask.dimshuffle((0, 1, 2, 'x'))
-
-        return M
-
-#    def linear(self, x, y):
-#        return T.tanh(T.dot(x, self.W1_q) + T.dot(y, self.W1_c))
+    def vector_composition(self, query, cands):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words, 5D: dim_h
+        """
+        q = T.dot(query, self.W_x).dimshuffle(0, 'x', 'x', 1, 2)
+        c = T.dot(cands, self.W_a).dimshuffle(0, 1, 2, 'x', 3)
+        return q + c
 
     def linear(self, x):
-        return T.tanh(T.dot(x, self.W1_q))
+        return T.tanh(T.dot(x, self.W_x))
 
     def bilinear(self, x, y):
-        return T.tanh(T.sum(T.dot(x, self.W1_q) * y, axis=2))
+        return T.tanh(T.sum(T.dot(x, self.W_x) * y, axis=2))
+
+    def linear_term2(self, x, y):
+        return T.tanh(T.dot(x, self.W_x).dimshuffle(0, 'x', 1, 2) + T.dot(y, self.W_y))
+
+    def inner_product(self, h):
+        return T.dot(h, self.w)
+
+    def compose(self, x):
+        # 1D: batch, 2D: n_words, 3D: n_e
+        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
+        return T.tanh(T.dot(x, self.W_x))
 
     @property
     def params(self):
@@ -136,6 +76,7 @@ class AlignmentLayer(Layer):
 
 
 class AttentionLayer(Layer):
+
     def __init__(self, a_type, n_d, activation):
         self.a_type = a_type
         self.n_d = n_d
@@ -263,34 +204,6 @@ class AttentionLayer(Layer):
         h_after = T.tanh(T.dot(r, self.W2_r))
 
         return h_after
-
-    def alignment_matrix(self, query, cands):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
-        """
-        q = T.dot(query, self.W1_q).dimshuffle(0, 'x', 'x', 1, 2)
-        c = T.dot(cands, self.W1_c).dimshuffle(0, 1, 2, 'x', 3)
-        return T.sum(q * c, axis=4)
-
-    def vector_composition(self, query, cands):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words, 5D: dim_h
-        """
-        q = T.dot(query, self.W1_q).dimshuffle(0, 'x', 'x', 1, 2)
-        c = T.dot(cands, self.W1_c).dimshuffle(0, 1, 2, 'x', 3)
-        return q + c
-
-    def alignment_vecs(self, a_matrix, vecs):
-        """
-        :param a_matrix: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
-        :param vecs: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return:
-        """
-        return
 
     @property
     def params(self):
@@ -552,3 +465,78 @@ class StrCNN(Layer):
     def params(self, param_list):
         for p, q in zip(self.params, param_list):
             p.set_value(q.get_value())
+
+
+class GRNN(Layer):
+    def __init__(self, n_in, n_out, activation=tanh, order=1, has_outgate=False, mode=1, clip_gradients=False):
+        self.n_in = n_in
+        self.n_out = n_out
+        self.activation = activation
+        self.order = order
+        self.clip_gradients = clip_gradients
+        self.has_outgate = has_outgate
+        self.has_bias = False
+        self.mode = mode
+        self.create_parameters()
+
+    def create_parameters(self):
+        self.W_e = create_shared(random_init((self.n_in, self.n_out)), name="W_e")
+        self.W = create_shared(random_init((self.n_out * 2, self.n_out)), name="W")
+        self.U = theano.shared(random_init((self.n_out * 3, self.n_out * 3)), name="U")
+        self.G = theano.shared(random_init((self.n_out * 2, self.n_out * 2)), name="G")
+        self.lst_params = [self.W_e, self.W, self.G, self.U]
+
+    def forward(self, x, eps=1e-8):
+        x = tanh(T.dot(x, self.W_e))
+        zero = T.zeros(shape=(x.shape[0], x.shape[1], self.n_out), dtype=theano.config.floatX)
+
+        def recursive(t, m):
+            def step(_t, _m):
+                h_l = _m[:, _t]
+                h_r = _m[:, _t + 1]
+
+                # 1D: batch, 2D: 2 * n_d
+                r = sigmoid(T.dot(T.concatenate([h_l, h_r], axis=1), self.G))
+                half = r.shape[1] / 2
+                # 1D: batch, 2D: n_d
+                r_l = r[:, :half]
+                r_r = r[:, half:]
+
+                # 1D: batch, 2D: n_d
+                h_hat = tanh(T.dot(T.concatenate([r_l * h_l, r_r * h_r], axis=1), self.W))
+
+                # 1D: batch, 2D: 3 * n_d
+                z_hat = T.exp(T.dot(T.concatenate([h_hat, h_l, h_r], axis=1), self.U))
+                # 1D: batch, 2D: 3 (h_hat, h_l, h_r), 3D: n_d
+                z_hat = z_hat.reshape((z_hat.shape[0], 3, z_hat.shape[1] / 3))
+
+                # 1D: batch, 2D: n_d
+                Z = T.sum(z_hat, axis=1)
+                # 1D: batch, 2D: 3, 3D: n_d
+                Z = T.repeat(Z, repeats=3, axis=1).reshape((Z.shape[0], Z.shape[1], 3)).dimshuffle((0, 2, 1))
+
+                z = z_hat / Z + eps
+
+                h = h_hat * z[:, 0] + h_l * z[:, 1] + h_r * z[:, 2]
+                seq_sub_tensor = h
+
+                return _m, seq_sub_tensor
+
+            [_, u], _ = theano.scan(fn=step,
+                                    sequences=T.arange(m.shape[1] - t - 1),
+                                    outputs_info=[m, None])
+
+            return T.set_subtensor(zero[:, :m.shape[1] - t - 1], u.dimshuffle((1, 0, 2)))
+
+        # x: 1D: batch, 2D: n_words, 3D: n_d
+        # y: 1D: n_words -1, 2D: batch, 3D: n_words, 4D: n_d
+        y, _ = theano.scan(fn=recursive,
+                           sequences=T.arange(x.shape[1] - 1),
+                           outputs_info=x)
+
+        return y[-1][:, 0]
+
+    @property
+    def params(self):
+        return [param for param in self.lst_params]
+

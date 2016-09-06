@@ -53,8 +53,12 @@ def train(args):
         # Set a model #
         ###############
         if args.attention:
-            model = attention_model.Model(args, emb_layer)
-            say('\nModel: Attention model\n')
+            if args.attention < 3:
+                model = attention_model.Model(args, emb_layer)
+                say('\nModel: Attention model\n')
+            else:
+                model = attention_model.AllWordModel(args, emb_layer)
+                say('\nModel: Attention all word model\n')
         else:
             if args.bi:
                 if args.double:
@@ -67,7 +71,12 @@ def train(args):
                 model = ranking_model.Model(args, emb_layer)
                 say('\nModel: Ranking Model\n')
             elif args.al:
-                model = alignment_model.Model(args, emb_layer)
+                if args.al == 1:
+                    model = alignment_model.AverageModel(args, emb_layer)
+                elif args.al == 2:
+                    model = alignment_model.WeightedAverageModel(args, emb_layer)
+                elif args.al == 3:
+                    model = alignment_model.AlignmentModel(args, emb_layer)
                 say('\nModel: Alignment Model\n')
             else:
                 if args.layer == 'grnn':
