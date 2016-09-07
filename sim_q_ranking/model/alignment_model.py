@@ -366,6 +366,94 @@ class AlignmentModel(basic_model.Model):
         return get_alignment_matrix(query, cands)
 
 
+class AlignmentVectorModel(AlignmentModel):
+
+    def __init__(self, args, emb_layer):
+        super(AlignmentVectorModel, self).__init__(args, emb_layer)
+
+    def compile(self):
+        args = self.args
+
+        self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
+
+        ###########
+        # Network #
+        ###########
+        mask_t = get_mask(self.idts, self.idps, self.padding_id)
+        xt = self.input_layer(ids=self.idts)
+        Ht = self.mid_layer(prev_h=xt)
+
+        # Q: 1D: n_queries, 2D: n_words, 3D: n_d
+        # C: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_d
+        # A: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+        Qt, Ct, At = self.alignment(Ht, self.idps, mask_t)
+
+        # A_q, 1D: n_queries, 2D: n_cands-1, 3D: n_words (query), 4D: n_words (cands)
+        # A_c, 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+        Aq_t, Ac_t = get_attention_matrix(At)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands/query), 4D: dim_h
+        Qv_t = get_attention_vectors(Ct, Aq_t)
+        Cv_t = get_attention_vectors(Qt.dimshuffle((0, 'x', 1, 2)), Ac_t)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        Qv_t = T.sum(Qv_t, axis=2)
+        Cv_t = T.sum(Cv_t, axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1
+        a_scores_t = T.sum(Qv_t * Cv_t, axis=1)
+
+        if args.body:
+            mask_b = get_mask(self.idbs, self.idps, self.padding_id)
+            xb = self.input_layer(ids=self.idbs)
+            Hb = self.mid_layer(prev_h=xb)
+            Ab = self.alignment(Hb, self.idps, mask_b)
+            a_scores_b = get_alignment_scores(Ab, mask_b)
+            a_scores_t = (a_scores_t + a_scores_b) * 0.5
+
+        #########
+        # Score #
+        #########
+        # The first one in each batch is a positive sample, the rest are negative ones
+        # 1D: n_queries, 2D: n_cands
+        scores = a_scores_t
+        pos_scores = scores[:, 0]
+        neg_scores = scores[:, 1:]
+        self.train_scores = T.argmax(scores, axis=1)
+        self.predict_scores = scores[0]
+
+        ##########################
+        # Set training objective #
+        ##########################
+        self.set_params(layers=self.layers)
+        self.set_loss(scores, pos_scores, neg_scores)
+        self.set_cost(args=self.args, params=self.params, loss=self.loss)
+
+    def alignment(self, x, idps, mask):
+        # 1D: batch * n_cands, 2D: n_words, 3D: n_d
+        x = x.dimshuffle((1, 0, 2))
+
+        # 1D: batch * n_cands, 2D: n_words, 3D: n_d
+        h = x[idps.ravel()]
+        # 1D: batch, 2D: n_cands, 3D: n_words, 4D: n_d
+        h = h.reshape((idps.shape[0], idps.shape[1], h.shape[1], h.shape[2]))
+
+        ###########
+        # Masking #
+        ###########
+        h = h * mask.dimshuffle((0, 1, 2, 'x'))
+
+        #################
+        # Query & Cands #
+        #################
+        # 1D: batch, 2D: n_words, 3D: n_d
+        query = h[:, 0]
+        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_d
+        cands = h[:, 1:]
+
+        return query, cands, get_alignment_matrix(query, cands)
+
+
 def get_alignment_matrix(query, cands):
     """
     :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
@@ -375,6 +463,42 @@ def get_alignment_matrix(query, cands):
     q = query.dimshuffle(0, 'x', 'x', 1, 2)
     c = cands.dimshuffle(0, 1, 2, 'x', 3)
     return T.sum(q * c, axis=4)
+
+
+def get_attention_matrix(A):
+    """
+    :param A: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+    :return: A_q, 1D: n_queries, 2D: n_cands-1, 3D: n_words (query), 4D: n_words (cands)
+    :return: A_c, 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+    """
+    # 1D: n_queries, 2D: n_cands-1, 3D: n_words (query), 4D: n_words (cands)
+    A_q = softmax_4d(x=A.dimshuffle((0, 1, 3, 2)), axis=3)
+    # 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+    A_c = softmax_4d(x=A, axis=3)
+    return A_q, A_c
+
+
+def softmax_4d(x, axis, eps=1e-8):
+    """
+    :param x: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+    :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
+    """
+    x = T.exp(x)
+    z = T.sum(x, axis=axis, keepdims=True)
+    return x / (z + eps)
+
+
+def get_attention_vectors(x, A):
+    """
+    :param x: 1D: n_queries, 2D: n_cands-1/1, 3D: n_words (query/cands), 4D: dim_h
+    :param A: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands/query), 4D: n_words (query/cands)
+    :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands/query), 4D: dim_h
+    """
+    # 1D: n_queries, 2D: n_cands-1, 3D: 1, 4D: n_words (query/cands), 5D: dim_h
+    x = x.dimshuffle((0, 1, 'x', 2, 3))
+    # 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands/query), 4D: n_words (query/cands), 5D: 1
+    A = A.dimshuffle((0, 1, 2, 3, 'x'))
+    return T.sum(A * x, axis=3)
 
 
 def get_alignment_scores(A, mask):

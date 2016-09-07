@@ -77,6 +77,8 @@ def train(args):
                     model = alignment_model.WeightedAverageModel(args, emb_layer)
                 elif args.al == 3:
                     model = alignment_model.AlignmentModel(args, emb_layer)
+                elif args.al == 4:
+                    model = alignment_model.AlignmentVectorModel(args, emb_layer)
                 say('\nModel: Alignment Model\n')
             else:
                 if args.layer == 'grnn':

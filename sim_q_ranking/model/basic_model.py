@@ -261,7 +261,7 @@ class Model(object):
             idps = np.asarray([[i for i in xrange(idts.shape[1])]], dtype='int32')
             scores = eval_func(idts, idbs, idps)
 
-            assert len(scores) == len(labels)
+            assert len(scores) == len(labels), '\n%s\n%s\n' % (str(scores), str(labels))
             ranks = (-scores).argsort()
             ranked_labels = labels[ranks]
             res.append(ranked_labels)
