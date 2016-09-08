@@ -13,10 +13,9 @@ from ..nn.optimization import create_optimization_updates
 from ..nn.basic import LSTM, GRU, CNN, apply_dropout
 from ..nn.advanced import RCNN, GRNN, StrCNN
 from ..nn.nn_utils import hinge_loss, cross_entropy_loss, normalize_2d, normalize_3d, average_without_padding
-from ..utils.io_utils import say, read_annotations, create_batches
+from ..utils.io_utils import say, load_annotations, PAD
+from ..utils.preprocess import create_batches
 from ..utils.eval import Evaluation
-
-PAD = "<padding>"
 
 
 class Model(object):
@@ -327,7 +326,7 @@ class Model(object):
 
             start_time = time.time()
 
-            train = read_annotations(args.train, data_size=args.data_size)
+            train = load_annotations(args.train, data_size=args.data_size)
             train_batches = create_batches(ids_corpus, train, batch_size, padding_id, pad_left=not args.average)
             n_train_batches = len(train_batches)
 

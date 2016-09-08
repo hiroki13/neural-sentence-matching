@@ -2,83 +2,17 @@ import numpy as np
 import theano
 import theano.tensor as T
 
+from ..utils.io_utils import say
+from nn_utils import normalize_3d
 from initialization import random_init, create_shared
 from initialization import tanh, linear, sigmoid, ReLU
 from basic import Layer, RecurrentLayer
 
 
-class AlignmentLayer(Layer):
-
-    def __init__(self, n_e, n_d, activation):
-        self.n_e = n_e
-        self.n_d = n_d
-        self.activation = activation
-        self.create_parameters()
-
-    def create_parameters(self):
-        n_e = self.n_e
-        n_d = self.n_d
-#        self.W_a = create_shared(random_init((n_e, n_d)), name="W1_c")
-#        self.W_x = create_shared(random_init((n_e, n_d)), name="W1_h")
-#        self.W_y = create_shared(random_init((n_e, n_d)), name="W1_h")
-        self.w = create_shared(random_init((2,)), name="w")
-#        self.lst_params = [self.W_a, self.W_x, self.W_y, self.w]
-        self.lst_params = [self.w]
-
-    def alignment_matrix(self, query, cands):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words
-        """
-#        q = T.dot(query, self.W_a).dimshuffle(0, 'x', 'x', 1, 2)
-#        c = T.dot(cands, self.W_a).dimshuffle(0, 1, 2, 'x', 3)
-        q = query.dimshuffle(0, 'x', 'x', 1, 2)
-        c = cands.dimshuffle(0, 1, 2, 'x', 3)
-        return T.sum(q * c, axis=4)
-
-    def vector_composition(self, query, cands):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: n_words, 5D: dim_h
-        """
-        q = T.dot(query, self.W_x).dimshuffle(0, 'x', 'x', 1, 2)
-        c = T.dot(cands, self.W_a).dimshuffle(0, 1, 2, 'x', 3)
-        return q + c
-
-    def linear(self, x):
-        return T.tanh(T.dot(x, self.W_x))
-
-    def bilinear(self, x, y):
-        return T.tanh(T.sum(T.dot(x, self.W_x) * y, axis=2))
-
-    def linear_term2(self, x, y):
-        return T.tanh(T.dot(x, self.W_x).dimshuffle(0, 'x', 1, 2) + T.dot(y, self.W_y))
-
-    def inner_product(self, h):
-        return T.dot(h, self.w)
-
-    def compose(self, x):
-        # 1D: batch, 2D: n_words, 3D: n_e
-        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
-        return T.tanh(T.dot(x, self.W_x))
-
-    @property
-    def params(self):
-        return self.lst_params
-
-    @params.setter
-    def params(self, param_list):
-        assert len(param_list) == len(self.lst_params)
-        for p, q in zip(self.lst_params, param_list):
-            p.set_value(q.get_value())
-
-
 class AttentionLayer(Layer):
 
-    def __init__(self, a_type, n_d, activation):
-        self.a_type = a_type
+    def __init__(self, model_type, n_d, activation):
+        self.model_type = model_type
         self.n_d = n_d
         self.activation = activation
         self.forward = None
@@ -89,20 +23,57 @@ class AttentionLayer(Layer):
         self.W1_c = create_shared(random_init((n_d, n_d)), name="W1_c")
         self.W1_q = create_shared(random_init((n_d, n_d)), name="W1_h")
 
-        if self.a_type > 1:
+        if self.model_type == 0:
+            say('\nAttention: standard\n')
+            self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
+            self.w = create_shared(random_init((n_d,)), name="w")
+            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w]
+            self.forward = self.attention
+        else:
+            say('\nAttention: decomposition\n')
             self.W2_r_a = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.W2_r_b = create_shared(random_init((n_d, n_d)), name="W2_r")
             self.w_a = create_shared(random_init((n_d,)), name="w")
             self.w_b = create_shared(random_init((n_d,)), name="w_b")
             self.lst_params = [self.W1_q, self.W1_c, self.W2_r_a, self.W2_r_b, self.w_a, self.w_b]
-            self.forward = self.forward_second_order
-        else:
-            self.W2_r = create_shared(random_init((n_d, n_d)), name="W2_r")
-            self.w = create_shared(random_init((n_d,)), name="w")
-            self.lst_params = [self.W1_q, self.W1_c, self.W2_r, self.w]
-            self.forward = self.forward_standard
+            self.forward = self.attention_decomp
 
-    def forward_second_order(self, Y, h, mask=None, eps=1e-8):
+    def attention(self, query, cands, mask=None, eps=1e-8):
+        """
+        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
+        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
+        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        """
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
+        M = T.tanh(T.dot(query, self.W1_q).dimshuffle(0, 'x', 1, 2) + T.dot(cands, self.W1_c).dimshuffle(0, 1, 'x', 2))
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
+        u = T.dot(M, self.w)
+        u = normalize_3d(u)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
+        alpha = T.nnet.softmax(u.reshape((cands.shape[0] * cands.shape[1], query.shape[1])))
+        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
+
+        if mask is not None:
+            if mask.dtype != theano.config.floatX:
+                mask = T.cast(mask, theano.config.floatX)
+            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
+            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
+
+        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
+        query = query.dimshuffle((0, 'x', 1, 2))
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        r = T.sum(query * alpha, axis=2)
+
+        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
+        h_after = T.tanh(T.dot(r, self.W2_r))
+
+        return h_after
+
+    def attention_decomp(self, Y, h, mask=None, eps=1e-8):
         """
         :param Y: 1D: n_queries, 2D: n_words, 3D: dim_h
         :param h: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
@@ -170,41 +141,6 @@ class AttentionLayer(Layer):
 
         return h_after
 
-    def forward_standard(self, query, cands, mask=None, eps=1e-8):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-        :return: h_after: 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        """
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        M = T.tanh(T.dot(query, self.W1_q).dimshuffle(0, 'x', 1, 2) + T.dot(cands, self.W1_c).dimshuffle(0, 1, 'x', 2))
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words
-        u = T.dot(M, self.w)
-        u = normalize_3d(u)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: 1
-        alpha = T.nnet.softmax(u.reshape((cands.shape[0] * cands.shape[1], query.shape[1])))
-        alpha = alpha.reshape((cands.shape[0], cands.shape[1], query.shape[1], 1))
-
-        if mask is not None:
-            if mask.dtype != theano.config.floatX:
-                mask = T.cast(mask, theano.config.floatX)
-            alpha = alpha * mask.dimshuffle((0, 1, 2, 'x'))
-            alpha /= T.sum(alpha, axis=2, keepdims=True) + eps
-
-        # 1D: n_queries, 2D: 1, 3D: n_words, 4D: dim_h
-        query = query.dimshuffle((0, 'x', 1, 2))
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        r = T.sum(query * alpha, axis=2)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        h_after = T.tanh(T.dot(r, self.W2_r))
-
-        return h_after
-
     @property
     def params(self):
         return self.lst_params
@@ -214,13 +150,6 @@ class AttentionLayer(Layer):
         assert len(param_list) == len(self.lst_params)
         for p, q in zip(self.lst_params, param_list):
             p.set_value(q.get_value())
-
-
-def normalize_3d(x, eps=1e-8):
-    # x is len*batch*d
-    # l2 is len*batch*1
-    l2 = x.norm(2, axis=2).dimshuffle((0, 1, 'x'))
-    return x / (l2 + eps)
 
 
 class RCNN(Layer):

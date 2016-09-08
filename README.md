@@ -23,9 +23,10 @@ To run the code, you need the following extra packages installed:
 
 ##### Usage
   1. Clone this repo
-  2. Use “export PYTHONPATH=/path/to/neural-sentence-matching-system/code” to add the neural-sentence-matching-system/code directory to Python library
-  3. Run `python code/main/main.py --help` to see all running options
+  2. Run `python -m sim_q_ranking.main.main --help` to see all running options
 
 ##### Example Comand
-  - Basic RCNN Model: `python -m sim_q_ranking.main.main --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --layer rcnn`
-  - Attention RCNN Model: `python -m sim_q_ranking.main.main --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --layer rcnn --attention 1`
+  - Basic Model: `python -m sim_q_ranking.main.main --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --layer rcnn`
+  - Attention Model: `python -m sim_q_ranking.main.main --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --layer rcnn --model attention`
+  - Alignment Model: `python -m sim_q_ranking.main.main --corpus path/to/data/text_tokenized.txt.gz --embeddings path/to/data/vector/vectors_pruned.200.txt.gz --train path/to/data/train_random.txt --dev path/to/data/dev.txt --test path/to/data/test.txt --layer rcnn --model alignment`
+

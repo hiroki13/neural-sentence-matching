@@ -1,10 +1,8 @@
 import time
 
-from ..utils import say, read_corpus, load_embedding_iterator, get_emb_layer, map_corpus, read_annotations,\
-    create_eval_batches, create_batches
-from ..model import attention_model, basic_model, bidirectional_model, grnn_model, ranking_model, alignment_model
-
-PAD = "<padding>"
+from ..utils.io_utils import say, load_corpus, load_embedding_iterator, load_annotations, PAD
+from ..utils.preprocess import map_corpus, get_emb_layer, create_batches, create_eval_batches
+from ..model import basic_model, attention_model, alignment_model
 
 
 def train(args):
@@ -15,7 +13,7 @@ def train(args):
     ##############
     # raw_corpus: {q_id: (title, body), ...}
     # embs: (word, vec)
-    raw_corpus = read_corpus(args.corpus)
+    raw_corpus = load_corpus(args.corpus)
     embs = load_embedding_iterator(args.embeddings) if args.embeddings else None
 
     ######################
@@ -30,17 +28,17 @@ def train(args):
     # Set datasets #
     ################
     if args.dev:
-        dev = read_annotations(args.dev, n_negs=-1, prune_pos_cnt=-1)
+        dev = load_annotations(args.dev, n_negs=-1, prune_pos_cnt=-1)
         dev = create_eval_batches(ids_corpus, dev, padding_id, pad_left=not args.average)
     if args.test:
-        test = read_annotations(args.test, n_negs=-1, prune_pos_cnt=-1)
+        test = load_annotations(args.test, n_negs=-1, prune_pos_cnt=-1)
         test = create_eval_batches(ids_corpus, test, padding_id, pad_left=not args.average)
 
     if args.train:
         start_time = time.time()
-        train = read_annotations(path=args.train, data_size=args.data_size)
+        train = load_annotations(path=args.train, data_size=args.data_size)
         train_batches = create_batches(ids_corpus=ids_corpus, data=train, batch_size=args.batch_size,
-                                                padding_id=padding_id, pad_left=not args.average)
+                                       padding_id=padding_id, pad_left=not args.average)
         say("{} to create batches\n".format(time.time() - start_time))
         say("{} batches, {} tokens in total, {} triples in total\n".format(
             len(train_batches),
@@ -49,45 +47,32 @@ def train(args):
         ))
         train_batches = None
 
-        ###############
-        # Set a model #
-        ###############
-        if args.attention:
-            if args.attention < 3:
-                model = attention_model.Model(args, emb_layer)
-                say('\nModel: Attention model\n')
+        ##################
+        # Select a model #
+        ##################
+        if args.model == 'attention':
+            model = attention_model.Model(args, emb_layer)
+            say('\nModel: Attention model\n')
+        elif args.model == 'alignment':
+            if args.model_type == 1:
+                model = alignment_model.AverageModel(args, emb_layer)
+                say('\nModel: Alignment Model: Average\n')
+            elif args.model_type == 2:
+                model = alignment_model.WeightedAverageModel(args, emb_layer)
+                say('\nModel: Alignment Model: Weighted average\n')
+            elif args.model_type == 3:
+                model = alignment_model.AlignmentModel(args, emb_layer)
+                say('\nModel: Alignment Model: Standard\n')
             else:
-                model = attention_model.AllWordModel(args, emb_layer)
-                say('\nModel: Attention all word model\n')
+                model = alignment_model.AlignmentVectorModel(args, emb_layer)
+                say('\nModel: Alignment Model: Attention vector\n')
         else:
-            if args.bi:
-                if args.double:
-                    model = bidirectional_model.DoubleModel(args, emb_layer)
-                    say('\nModel: Bidirectional Double Model\n')
-                else:
-                    model = bidirectional_model.Model(args, emb_layer)
-                    say('\nModel: Bidirectional Model\n')
-            elif args.ranking:
-                model = ranking_model.Model(args, emb_layer)
-                say('\nModel: Ranking Model\n')
-            elif args.al:
-                if args.al == 1:
-                    model = alignment_model.AverageModel(args, emb_layer)
-                elif args.al == 2:
-                    model = alignment_model.WeightedAverageModel(args, emb_layer)
-                elif args.al == 3:
-                    model = alignment_model.AlignmentModel(args, emb_layer)
-                elif args.al == 4:
-                    model = alignment_model.AlignmentVectorModel(args, emb_layer)
-                say('\nModel: Alignment Model\n')
-            else:
-                if args.layer == 'grnn':
-                    model = grnn_model.Model(args, emb_layer)
-                    say('\nModel: GRNN Model\n')
-                else:
-                    model = basic_model.Model(args, emb_layer)
-                    say('\nModel: Basic Model\n')
+            model = basic_model.Model(args, emb_layer)
+            say('\nModel: Basic Model\n')
 
+        #####################
+        # Compile the model #
+        #####################
         model.compile()
 
         # set parameters using pre-trained network
@@ -95,9 +80,9 @@ def train(args):
             say('\nLoad pretrained parameters\n')
             model.load_pretrained_parameters(args)
 
-        #################
-        # Train a model #
-        #################
+        ###################
+        # Train the model #
+        ###################
         model.train(
             ids_corpus,
             dev if args.dev else None,

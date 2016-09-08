@@ -1,24 +1,12 @@
-import gzip
-import time
-import math
-import cPickle as pickle
-
 from prettytable import PrettyTable
-import numpy as np
 import theano
 import theano.tensor as T
 
 import basic_model
-from ..nn.advanced import AlignmentLayer
 from ..nn.initialization import get_activation_by_name
-from ..nn.optimization import create_optimization_updates
-from ..nn.basic import LSTM, GRU, CNN, apply_dropout, Layer
-from ..nn.advanced import RCNN, GRNN, StrCNN
-from ..utils.io_utils import say, read_annotations, create_batches
-from ..utils.eval import Evaluation
-from ..nn.nn_utils import hinge_loss, cross_entropy_loss, normalize_2d, normalize_3d, average_without_padding
-
-PAD = "<padding>"
+from ..nn.basic import Layer
+from ..utils.io_utils import say
+from ..nn.nn_utils import normalize_3d, average_without_padding, average_without_padding_3d, get_mask, softmax
 
 
 class AverageModel(basic_model.Model):
@@ -141,144 +129,6 @@ class WeightedAverageModel(basic_model.Model):
         return T.sum(q * cand_vecs, axis=2)
 
 
-class AlignmentModel_including_bugs(basic_model.Model):
-
-    def __init__(self, args, emb_layer):
-        super(AlignmentModel, self).__init__(args, emb_layer)
-
-    def compile(self):
-        args = self.args
-
-        self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
-
-        ###########
-        # Network #
-        ###########
-        xt = self.input_layer(ids=self.idts)
-        query, cands, A = self.alignment(xt, self.idps)
-        M = self.filter_layer(cands=cands, A=A)
-        ht = self.mid_layer(query, M, self.idts, self.padding_id)
-
-        #########
-        # Score #
-        #########
-        # The first one in each batch is a positive sample, the rest are negative ones
-        scores = self.get_scores(ht)
-        pos_scores = scores[:, 0]
-        neg_scores = scores[:, 1:]
-        self.train_scores = T.argmax(scores, axis=1)
-        self.predict_scores = scores[0]
-
-        ##########################
-        # Set training objective #
-        ##########################
-        self.set_params(layers=self.layers)
-        self.set_loss(scores, pos_scores, neg_scores)
-        self.set_cost(args=self.args, params=self.params, loss=self.loss)
-
-    def set_layers(self, args, n_d, n_e):
-        activation = get_activation_by_name(args.activation)
-        a_layer = AlignmentLayer(n_e=self.n_e, n_d=self.n_d, activation=activation)
-        self.layers.append(a_layer)
-
-    def alignment(self, x, idps):
-        layer = self.layers[0]
-
-        # 1D: batch * n_cands, 2D: n_words, 3D: n_e
-        x = x.dimshuffle((1, 0, 2))
-
-        # 1D: batch * n_cands, 2D: n_words, 3D: n_e
-        h = x[idps.ravel()]
-        # 1D: batch, 2D: n_cands, 3D: n_words, 4D: n_e
-        h = h.reshape((idps.shape[0], idps.shape[1], h.shape[1], h.shape[2]))
-
-        # 1D: batch, 2D: n_words, 3D: n_e
-        query = h[:, 0]
-        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
-        cands = h[:, 1:]
-
-        return query, cands, layer.alignment_matrix(query, cands)
-
-    def filter_layer(self, cands, A):
-        """
-        :param cands: 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
-        :param A: 1D: batch, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-        :return: 1D: batch, 2D: n_cands-1, 3D: n_words (query), 4D: n_e
-        """
-
-        # 1D: batch, 2D: n_cands-1, 3D: n_words (query)
-        y = T.argmax(A, axis=2)
-
-        # 1D: n_cands-1
-        v = T.arange(y.shape[1]) * y.shape[2]
-        v = v.dimshuffle((0, 'x'))
-        # 1D: n_cands-1, 2D: n_words (query)
-        v = T.repeat(v, y.shape[2], axis=1)
-
-        # 1D: n_queries, 2D: n_cands-1, 3D: n_words (query)
-        y = y + v
-        # 1D: n_queries, 2D: n_cands-1 * n_words (query)
-        y = y.reshape((y.shape[0], y.shape[1] * y.shape[2]))
-
-        M = cands.reshape((cands.shape[0], cands.shape[1] * cands.shape[2], -1))
-        y = M[:, y]
-        y = y.reshape((y.shape[0], v.shape[0], v.shape[1], -1))
-
-#        y = cands[T.arange(y.shape[0]), T.arange(y.shape[1]), y.dimshuffle((0, 2, 1))]
-#        return y.dimshuffle((0, 2, 1, 3))
-        return y
-
-    def mid_layer(self, query, M, ids, padding_id):
-        """
-        :param query: 1D: batch, 2D: n_words, 3D: n_e
-        :param M: 1D: batch, 2D: n_cands-1, 3D: n_words (query), 4D: n_e
-        :return: 1D: batch, 2D: n_cands-1, 3D: n_d
-        """
-        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_d
-        h = self.layers[0].linear_term2(query, M)
-
-        # 1D: batch, 2D: n_cands-1, 3D: n_d
-        h = T.max(h, axis=2)
-#        h = average_without_padding(h, ids, padding_id)
-
-        return h
-
-    def get_scores(self, h):
-        """
-        :param h: 1D: batch, 2D: n_cands-1, 3D: n_d
-        :return: 1D: batch, 2D: n_cands-1
-        """
-        # 1D: batch, 2D: n_cands
-        return self.layers[0].inner_product(h)
-
-    def sim_weighted(self, A, cands):
-        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
-        return A.dimshuffle((0, 1, 2, 'x')) * cands
-
-    def decompose(self, query, M):
-        # 1D: batch, 2D: n_cands-1, 3D: n_words, 4D: n_e
-        vec1 = cosine_sim(query.dimshuffle((0, 1, 2, 'x')), M, axis=3) * M
-        vec2 = query - vec1
-        return vec1, vec2
-
-    def alignment_matrix(self, query, cands):
-        """
-        :param query: 1D: n_queries, 2D: n_words, 3D: dim_h
-        :param cands: 1D: n_queries, 2D: n_cands-1, 3D: n_words, 4D: dim_h
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-        """
-        q = query.dimshuffle(0, 'x', 'x', 1, 2)
-        c = cands.dimshuffle(0, 1, 2, 'x', 3)
-        return T.sum(q * c, axis=4)
-
-    def test_get_max_aligned_scores(self, A):
-        """
-        :param A: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-        :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands)
-        """
-        return T.sum(T.max(A, axis=3), axis=2)
-
-
 class AlignmentModel(basic_model.Model):
 
     def __init__(self, args, emb_layer):
@@ -397,11 +247,11 @@ class AlignmentVectorModel(AlignmentModel):
         Cv_t = get_attention_vectors(Qt.dimshuffle((0, 'x', 1, 2)), Ac_t)
 
         # 1D: n_queries, 2D: n_cands-1, 3D: dim_h
-        Qv_t = T.sum(Qv_t, axis=2)
-        Cv_t = T.sum(Cv_t, axis=2)
+        Qv_t = T.mean(Qv_t, axis=2)
+        Cv_t = T.mean(Cv_t, axis=2)
 
         # 1D: n_queries, 2D: n_cands-1
-        a_scores_t = T.sum(Qv_t * Cv_t, axis=1)
+        a_scores_t = T.sum(Qv_t * Cv_t, axis=2)
 
         if args.body:
             mask_b = get_mask(self.idbs, self.idps, self.padding_id)
@@ -472,20 +322,10 @@ def get_attention_matrix(A):
     :return: A_c, 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
     """
     # 1D: n_queries, 2D: n_cands-1, 3D: n_words (query), 4D: n_words (cands)
-    A_q = softmax_4d(x=A.dimshuffle((0, 1, 3, 2)), axis=3)
+    A_q = softmax(x=A.dimshuffle((0, 1, 3, 2)), axis=3)
     # 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-    A_c = softmax_4d(x=A, axis=3)
+    A_c = softmax(x=A, axis=3)
     return A_q, A_c
-
-
-def softmax_4d(x, axis, eps=1e-8):
-    """
-    :param x: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-    :return: 1D: n_queries, 2D: n_cands-1, 3D: n_words (cands), 4D: n_words (query)
-    """
-    x = T.exp(x)
-    z = T.sum(x, axis=axis, keepdims=True)
-    return x / (z + eps)
 
 
 def get_attention_vectors(x, A):
@@ -507,30 +347,3 @@ def get_alignment_scores(A, mask):
     :return: 1D: n_queries, 2D: n_cands-1
     """
     return average_without_padding_3d(T.max(A, axis=3), mask)
-
-
-def get_mask(ids, idps, padding_id):
-    # 1D: n_queries * n_cands, 2D: n_words
-    ids = ids.dimshuffle((1, 0))
-    # 1D: n_queries * n_cands, 2D: n_words
-    ids = ids[idps.ravel()]
-    # 1D: n_queries, 2D: n_cands, 3D: n_words
-    ids = ids.reshape((idps.shape[0], idps.shape[1], -1))
-    mask = T.neq(ids, padding_id)
-    mask = T.cast(mask, theano.config.floatX)
-    return mask
-
-
-def average_without_padding_3d(x, mask, eps=1e-8):
-    """
-    :param x: 1D: n_queries, 2D: n_cands-1, 3D: n_words
-    :param mask: 1D: n_queries, 2D: n_cands, 3D: n_words
-    :return: 1D: batch, 2D: n_d
-    """
-    mask = mask[:, 1:]
-    # 1D: n_queries, 2D: n_cands
-    return T.sum(x * mask, axis=2) / (T.sum(mask, axis=2) + eps)
-
-
-def cosine_sim(x, y, axis):
-    return T.sum(x * y, axis-1) / (x.norm(2, axis) * y.norm(2, axis))
