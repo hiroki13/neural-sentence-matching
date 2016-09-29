@@ -25,7 +25,7 @@ def load_embedding_iterator(path):
                 yield word, vals
 
 
-def load_corpus(path):
+def load_ubuntu_corpus(path):
     empty_cnt = 0
     raw_corpus = {}
     fopen = gzip.open if path.endswith(".gz") else open
@@ -41,6 +41,19 @@ def load_corpus(path):
             raw_corpus[q_id] = (title, body)
     say("{} empty titles ignored.\n".format(empty_cnt))
     return raw_corpus
+
+
+def load_msr_corpus(path):
+    corpus = []
+    fopen = gzip.open if path.endswith(".gz") else open
+    with fopen(path) as fin:
+        for line in fin:
+            line = line.rstrip()
+            line = line.split("\t")
+            label = line[0]
+            if label == '0' or label == '1':
+                corpus.append([int(label), line[-2], line[-1]])
+    return corpus
 
 
 def load_annotations(path, n_negs=20, prune_pos_cnt=10, data_size=1):

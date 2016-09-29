@@ -3,14 +3,36 @@ from collections import Counter
 
 import numpy as np
 
-from io_utils import PAD, UNK
+from io_utils import PAD, UNK, load_msr_corpus
+from ..utils.tokenizer import tokenize
 from ..nn.basic import EmbeddingLayer
 
 
+def tokenize_msr_corpus(corpus):
+    return [[sample[0], tokenize(sample[1]), tokenize(sample[2])] for sample in corpus]
+
+
+def lower_msr_corpus(corpus):
+    lowered_corpus = []
+    for sample in corpus:
+        sent1 = [w.lower() for w in sample[1]]
+        sent2 = [w.lower() for w in sample[2]]
+        lowered_corpus.append([sample[0], sent1, sent2])
+    return lowered_corpus
+
+
+def get_msr_corpus(path):
+    corpus = load_msr_corpus(path)
+    corpus = tokenize_msr_corpus(corpus)
+    corpus = lower_msr_corpus(corpus)
+    return corpus
+
+
 def get_emb_layer(raw_corpus, n_d, embs=None, cut_off=2, unk=UNK, padding=PAD, fix_init_embs=True):
-    cnt = Counter(w for q_id, pair in raw_corpus.iteritems() for x in pair for w in x)
-    cnt[unk] = cut_off + 1
-    cnt[padding] = cut_off + 1
+    if raw_corpus:
+        cnt = Counter(w for q_id, pair in raw_corpus.iteritems() for x in pair for w in x)
+        cnt[unk] = cut_off + 1
+        cnt[padding] = cut_off + 1
     embedding_layer = EmbeddingLayer(
         n_d=n_d,
         # vocab = (w for w,c in cnt.iteritems() if c > cut_off),
@@ -26,10 +48,51 @@ def map_corpus(raw_corpus, embedding_layer, filter_oov, max_len=100):
     for q_id, pair in raw_corpus.iteritems():
         item = (embedding_layer.map_to_ids(pair[0], filter_oov=filter_oov),
                 embedding_layer.map_to_ids(pair[1], filter_oov=filter_oov)[:max_len])
-#        if len(item[0]) == 0:
-#            say("empty title after mapping to IDs. Doc No.{}\n".format(q_id))
         ids_corpus[q_id] = item
     return ids_corpus
+
+
+def map_msr_corpus(corpus, embedding_layer, filter_oov):
+    ids_corpus = []
+    for sample in corpus:
+        sent1 = embedding_layer.map_to_ids(sample[1], filter_oov=filter_oov)
+        sent2 = embedding_layer.map_to_ids(sample[2], filter_oov=filter_oov)
+        ids_corpus.append([sample[0], sent1, sent2])
+    return ids_corpus
+
+
+def get_3d_batch(samples, batch_size=32, pad_id=0):
+    """
+    :param samples: 1D: n_samples, 2D: [label, sent1, sent2]; sent=1D np.array
+    :return:
+    """
+    batches = []
+    one_batch_x = []
+    one_batch_y = []
+
+    for sample in samples:
+        one_batch_x.extend(sample[1:])
+        one_batch_y.append(sample[0])
+
+        if len(one_batch_y) == batch_size:
+            batch_x = padding(one_batch_x, pad_id)
+            batch_y = np.asarray(one_batch_y, dtype='float32')
+            batches.append((batch_x, batch_y))
+            one_batch_x = []
+            one_batch_y = []
+
+    if one_batch_x:
+        batch_x = padding(one_batch_x, pad_id)
+        batch_y = np.asarray(one_batch_y, dtype='float32')
+        batches.append((batch_x, batch_y))
+
+    return batches
+
+
+def padding(matrix, pad_id=0):
+    max_column_len = max(1, max(len(row) for row in matrix))
+    return np.column_stack([np.pad(row, (max_column_len - len(row), 0), 'constant',
+                                   constant_values=pad_id) for row in matrix])
 
 
 def create_batches(ids_corpus, data, batch_size, padding_id, data_indices=None, pad_left=True):

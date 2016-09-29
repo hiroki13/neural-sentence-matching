@@ -10,6 +10,7 @@ theano.config.floatX = 'float32'
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(sys.argv[0])
+    argparser.add_argument("--task", type=str, default='sqr')
 
     ########
     # Data #
