@@ -172,7 +172,7 @@ class Model(object):
 
     @staticmethod
     def set_loss(y, y_scores):
-        return binary_cross_entropy(y, y_scores)
+        return T.mean(binary_cross_entropy(y_scores, y))
 
     @staticmethod
     def set_cost(args, params, loss):

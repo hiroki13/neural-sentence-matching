@@ -21,8 +21,8 @@ def cross_entropy_loss(scores):
     return - T.mean(T.log(probs[:, 0]))
 
 
-def binary_cross_entropy(y, y_prob):
-    return - (T.sum(y * T.log(y_prob) + (1. - y) * T.log(1. - y_prob)))
+def binary_cross_entropy(output, target):
+    return T.nnet.binary_crossentropy(output=output, target=target)
 
 
 def normalize_2d(x, eps=1e-8):
