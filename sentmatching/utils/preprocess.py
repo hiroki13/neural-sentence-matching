@@ -3,8 +3,9 @@ from collections import Counter
 
 import numpy as np
 
-from io_utils import PAD, UNK, load_msr_corpus
-from ..utils.tokenizer import tokenize
+from io_utils import PAD, UNK, SPACE, UNDER_BAR
+from loader import load_msr_corpus
+from tokenizer import tokenize
 from ..nn.basic import EmbeddingLayer
 
 
@@ -21,25 +22,28 @@ def lower_msr_corpus(corpus):
     return lowered_corpus
 
 
-def get_msr_corpus(path):
+def preprocess_msr_corpus(path):
     corpus = load_msr_corpus(path)
     corpus = tokenize_msr_corpus(corpus)
     corpus = lower_msr_corpus(corpus)
     return corpus
 
 
-def get_emb_layer(raw_corpus, n_d, embs=None, cut_off=2, unk=UNK, padding=PAD, fix_init_embs=True):
+def get_emb_layer(raw_corpus, n_d, embs=None, cut_off=1, unk=UNK, padding=PAD, fix_init_embs=True):
+    vocab = [unk, padding]
     if raw_corpus:
-        cnt = Counter(w for q_id, pair in raw_corpus.iteritems() for x in pair for w in x)
-        cnt[unk] = cut_off + 1
-        cnt[padding] = cut_off + 1
+        cnt = Counter(w for w in raw_corpus)
+        vocab = [w for w, c in cnt.iteritems() if c > cut_off]
+        vocab.append(unk)
+        vocab.append(padding)
+
     embedding_layer = EmbeddingLayer(
         n_d=n_d,
-        # vocab = (w for w,c in cnt.iteritems() if c > cut_off),
-        vocab=[unk, padding],
+        vocab=vocab,
         embs=embs,
         fix_init_embs=fix_init_embs
     )
+
     return embedding_layer
 
 
@@ -59,6 +63,87 @@ def map_msr_corpus(corpus, embedding_layer, filter_oov):
         sent2 = embedding_layer.map_to_ids(sample[2], filter_oov=filter_oov)
         ids_corpus.append([sample[0], sent1, sent2])
     return ids_corpus
+
+
+def map_word_feat_to_id(feats, emb_layer, filter_oov):
+    ids = []
+    for feat1, feat2 in zip(feats[0], feats[1]):
+        words1 = emb_layer.map_to_ids(feat1[0], filter_oov=filter_oov)
+        words2 = emb_layer.map_to_ids(feat2[0], filter_oov=filter_oov)
+        ids.append([words1, words2])
+    return ids
+
+
+def map_sem_feat_to_id(feats, emb_layer, filter_oov):
+    ids = []
+    for feat1, feat2 in zip(feats[0], feats[1]):
+        sem1 = [emb_layer.map_to_ids(sem, filter_oov=filter_oov) for sem in feat1[-1]]
+        sem2 = [emb_layer.map_to_ids(sem, filter_oov=filter_oov) for sem in feat2[-1]]
+        ids.append([sem1, sem2])
+    return ids
+
+
+def map_label_to_id(corpus):
+    return [sample[0] for sample in corpus]
+
+
+def get_msr_sem_feats(corpus):
+    feats1 = []
+    feats2 = []
+    for sample in corpus:
+        words1, pos1, preds1, sem_roles1 = _separate_elems(sample[1].split())
+        words2, pos2, preds2, sem_roles2 = _separate_elems(sample[2].split())
+        feats1.append((words1, pos1, preds1, sem_roles1))
+        feats2.append((words2, pos2, preds2, sem_roles2))
+    return feats1, feats2
+
+
+def get_sem_role_corpus(feats):
+    """
+    :param feats: (feats1, feats2)
+    :return: 1D: [sem_role, ...]
+    """
+    sem_roles = []
+    for feats1, feats2 in zip(feats[0], feats[1]):
+        for sent_sr1, sent_sr2 in zip(feats1[-1], feats2[-1]):
+            for word_sr in sent_sr1:
+                sr = word_sr.split(UNDER_BAR)
+                sem_roles.extend(sr)
+            for word_sr in sent_sr2:
+                sr = word_sr.split(UNDER_BAR)
+                sem_roles.extend(sr)
+    return sem_roles
+
+
+def map_msr_srl_corpus(corpus, embedding_layer, filter_oov):
+    ids_corpus = []
+    for sample in corpus:
+        words1, pos1, preds1, sem_roles1 = _separate_elems(sample[1].split())
+        words2, pos2, preds2, sem_roles2 = _separate_elems(sample[2].split())
+        sent1 = embedding_layer.map_to_ids(words1, filter_oov=filter_oov)
+        sent2 = embedding_layer.map_to_ids(words2, filter_oov=filter_oov)
+        ids_corpus.append([sample[0], sent1, sent2])
+    return ids_corpus
+
+
+def _separate_elems(sent):
+    """
+    :param sent: word_POS_PRED_SR_SR_..._SR word_...
+    :return:
+    """
+    words = []
+    pos = []
+    preds = []
+    sem_roles = []
+    for word in sent:
+        elems = word.split(UNDER_BAR)
+        words.append(elems[0])
+        pos.append(elems[1])
+        preds.append(elems[2])
+        if len(elems) > 3:
+            sem_roles.append(elems[3:])
+    assert len(words) == len(pos) == len(preds)
+    return words, pos, preds, sem_roles
 
 
 def get_3d_batch(samples, batch_size=32, pad_id=0):
@@ -85,6 +170,38 @@ def get_3d_batch(samples, batch_size=32, pad_id=0):
         batch_x = padding(one_batch_x, pad_id)
         batch_y = np.asarray(one_batch_y, dtype='float32')
         batches.append((batch_x, batch_y))
+
+    return batches
+
+
+def get_3d_batch_samples(samples, batch_size=32, pad_id=0):
+    """
+    :param samples: 1D: n_samples, 2D: [[words1, words2], [sem1, sem2], label]
+    :return:
+    """
+    batches = []
+    n_elems = len(samples)
+    one_batch = [[] for i in xrange(n_elems)]
+
+    for sample in zip(*samples):
+        for i, elem in enumerate(sample):
+            if i == n_elems - 1:
+                one_batch[i].append(elem)
+            else:
+                one_batch[i].extend(elem)
+
+        if len(one_batch[-1]) >= batch_size:
+            for i, elem in enumerate(one_batch[:-1]):
+                one_batch[i] = padding(one_batch[i], pad_id)
+            one_batch[-1] = np.asarray(one_batch[-1], dtype='float32')
+            batches.append(one_batch)
+            one_batch = [[] for i in xrange(n_elems)]
+
+    if one_batch[0]:
+        for i, elem in enumerate(one_batch[:-1]):
+            one_batch[i] = padding(one_batch[i], pad_id)
+        one_batch[-1] = np.asarray(one_batch[-1], dtype='float32')
+        batches.append(one_batch)
 
     return batches
 

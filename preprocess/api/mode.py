@@ -30,9 +30,10 @@ def pos_tagging(argv):
     corpus = loader.load_corpus(argv.corpus)
     tokenized_corpus = converter.convert_raw_to_token(corpus)
     saver.save_tokenized_sents(tokenized_corpus)
+
     tagged_sents = converter.convert_raw_to_pos()
     saver.save_pos_msr_corpus(corpus, tagged_sents)
-    saver.save_pos_corpus(tagged_sents)
+    saver.save_pos_sents(tagged_sents)
 
 
 def sem_role_labeling(argv):
@@ -43,7 +44,9 @@ def sem_role_labeling(argv):
     corpus = loader.load_corpus(argv.corpus)
     tokenized_corpus = converter.convert_raw_to_token(corpus)
     saver.save_tokenized_sents(tokenized_corpus)
+
     tagged_sents = converter.convert_raw_to_pos()
-    saver.save_pos_corpus(tagged_sents)
+    saver.save_pos_sents(tagged_sents)
+
     srl_sents = converter.convert_pos_to_srl()
     saver.save_srl_msr_corpus(corpus, tagged_sents, srl_sents)

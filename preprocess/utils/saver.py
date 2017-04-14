@@ -42,7 +42,7 @@ class Saver(object):
                 fout.writelines(text.encode('utf-8') + '\n')
 
     @staticmethod
-    def save_pos_corpus(tagged_sents, fn='corpus.tagged.txt'):
+    def save_pos_sents(tagged_sents, fn='corpus.tagged.txt'):
         with open(fn, 'w') as fout:
             for sent in tagged_sents:
                 fout.writelines(sent.encode('utf-8') + '\n')

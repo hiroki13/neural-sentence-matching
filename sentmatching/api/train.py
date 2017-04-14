@@ -1,7 +1,8 @@
 import time
 
-from ..utils.io_utils import say, load_ubuntu_corpus, load_embedding_iterator, load_annotations, PAD
-from ..utils.preprocess import get_msr_corpus, map_corpus, map_msr_corpus, get_emb_layer, get_3d_batch, create_batches, create_eval_batches
+from ..utils.io_utils import say, PAD
+from ..utils.loader import load_ubuntu_corpus, load_msr_corpus, load_embedding_iterator, load_annotations
+from ..utils.preprocess import get_3d_batch_samples, map_word_feat_to_id, map_sem_feat_to_id, map_label_to_id, preprocess_msr_corpus, get_msr_sem_feats, get_sem_role_corpus, map_corpus, map_msr_corpus, map_msr_srl_corpus, get_emb_layer, get_3d_batch, create_batches, create_eval_batches
 from ..model import basic_model, attention_model, alignment_model, sent_matching_model
 
 
@@ -51,8 +52,8 @@ def get_ubuntu_samples(args):
 
 def get_msr_samples(args, emb_layer):
 
-    train_corpus = get_msr_corpus(args.train)
-    test_corpus = get_msr_corpus(args.test)
+    train_corpus = preprocess_msr_corpus(args.train)
+    test_corpus = preprocess_msr_corpus(args.test)
     train_corpus = map_msr_corpus(train_corpus, emb_layer, filter_oov=args.filter_oov)
     test_corpus = map_msr_corpus(test_corpus, emb_layer, filter_oov=args.filter_oov)
     say("vocab size={}, train corpus size={}, test corpus size={}\n".format(
@@ -62,6 +63,42 @@ def get_msr_samples(args, emb_layer):
     # 1D: n_batches, 2D: max_n_words, 3D: batch; word (label) id
     train_samples = get_3d_batch(train_corpus, args.batch_size, pad_id)
     test_samples = get_3d_batch(test_corpus, 1, pad_id)
+
+    return train_samples, test_samples
+
+
+def get_msr_srl_samples(args, emb_layer):
+
+    train_corpus = load_msr_corpus(args.train)
+    test_corpus = load_msr_corpus(args.test)
+
+    train_feats = get_msr_sem_feats(train_corpus)
+    test_feats = get_msr_sem_feats(test_corpus)
+
+    train_sem_role_corpus = get_sem_role_corpus(train_feats)
+    emb_layer_sem = get_emb_layer(raw_corpus=train_sem_role_corpus, n_d=args.hidden_dim, embs=None, cut_off=0)
+
+    train_w = map_word_feat_to_id(train_feats, emb_layer, filter_oov=args.filter_oov)
+    test_w = map_word_feat_to_id(test_feats, emb_layer, filter_oov=args.filter_oov)
+
+    train_s = map_sem_feat_to_id(train_feats, emb_layer_sem, filter_oov=args.filter_oov)
+    test_s = map_sem_feat_to_id(test_feats, emb_layer_sem, filter_oov=args.filter_oov)
+
+    train_y = map_label_to_id(train_corpus)
+    test_y = map_label_to_id(test_corpus)
+
+#    train_corpus = map_msr_srl_corpus(train_corpus, emb_layer, filter_oov=args.filter_oov)
+#    test_corpus = map_msr_srl_corpus(test_corpus, emb_layer, filter_oov=args.filter_oov)
+
+    say("vocab size={}, train corpus size={}, test corpus size={}\n".format(
+        emb_layer.n_V, len(train_corpus), len(test_corpus)))
+    pad_id = emb_layer.vocab_map[PAD]
+
+    # 1D: n_batches, 2D: max_n_words, 3D: batch; word (label) id
+    train_samples = get_3d_batch_samples([train_w, train_y], args.batch_size, pad_id)
+    test_samples = get_3d_batch_samples([test_w, test_y], 1, pad_id)
+#    train_samples = get_3d_batch(train_corpus, args.batch_size, pad_id)
+#    test_samples = get_3d_batch(test_corpus, 1, pad_id)
 
     return train_samples, test_samples
 
@@ -93,7 +130,8 @@ def train_pi(args):
     embs = load_embedding_iterator(args.embeddings) if args.embeddings else None
     emb_layer = get_emb_layer(raw_corpus=None, n_d=args.hidden_dim, cut_off=args.cut_off, embs=embs)
 
-    train_samples, test_samples = get_msr_samples(args, emb_layer)
+#    train_samples, test_samples = get_msr_samples(args, emb_layer)
+    train_samples, test_samples = get_msr_srl_samples(args, emb_layer)
 
     model = sent_matching_model.Model(args, emb_layer)
     model.compile()

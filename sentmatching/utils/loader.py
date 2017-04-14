@@ -1,16 +1,9 @@
-import sys
 import gzip
 import random
 
+from io_utils import say
+
 import numpy as np
-
-PAD = '<padding>'
-UNK = '<unk>'
-
-
-def say(s, stream=sys.stdout):
-    stream.write(s)
-    stream.flush()
 
 
 def load_embedding_iterator(path):
