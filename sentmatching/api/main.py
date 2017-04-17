@@ -1,10 +1,12 @@
 import sys
 import argparse
 
+import numpy as np
 import theano
 
 import train
 
+np.random.seed(0)
 theano.config.floatX = 'float32'
 
 
@@ -15,6 +17,7 @@ if __name__ == "__main__":
     ########
     # Data #
     ########
+    argparser.add_argument("--data_type", type=str, default="base")
     argparser.add_argument("--corpus", type=str)
     argparser.add_argument("--train", type=str, default="")
     argparser.add_argument("--test", type=str, default="")

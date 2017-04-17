@@ -2,6 +2,7 @@ import gzip
 import time
 import math
 import cPickle as pickle
+from abc import ABCMeta, abstractmethod
 
 import numpy as np
 import theano
@@ -16,29 +17,31 @@ from ..utils.io_utils import say, PAD
 
 
 class Model(object):
+    __metaclass__ = ABCMeta
 
-    def __init__(self, args, emb_layer):
+    def __init__(self, args, emb_layers):
         self.args = args
 
-        self.emb_layer = emb_layer
+        self.emb_layers = emb_layers
         self.layers = []
         self.params = []
 
         ###################
         # Network options #
         ###################
-        self.activation = args.activation
-        self.n_d = args.hidden_dim
-        self.n_e = emb_layer.n_d
-        self.pad_id = emb_layer.vocab_map[PAD]
-        self.dropout = theano.shared(np.float32(args.dropout).astype(theano.config.floatX))
+        self.activation = None
+        self.n_d = None
+        self.n_e = None
+        self.pad_id = None
+        self.dropout = None
 
         ###################
         # Input variables #
         ###################
-        # 1D: n_words, 2D: batch * n_cands
-        self.x = T.imatrix()
-        self.y = T.fvector()
+        self.x = None
+        self.y = None
+        self.train_inputs = None
+        self.pred_inputs = None
 
         ######################
         # Training objective #
@@ -51,119 +54,9 @@ class Model(object):
         ##################
         self.y_pred = None
 
+    @abstractmethod
     def compile(self):
-        self.set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
-
-        ###########
-        # Network #
-        ###########
-        h_in = self.input_layer(x=self.x)
-        h = self.mid_layer(h_prev=h_in, x=self.x, pad_id=self.pad_id)
-        y_scores = self.output_layer(h=h)
-        self.y_pred = T.le(0.5, y_scores)
-
-        #########################
-        # Set an objective func #
-        #########################
-        self.set_params(layers=self.layers)
-        self.loss = self.set_loss(self.y, y_scores)
-        self.cost = self.set_cost(args=self.args, params=self.params, loss=self.loss)
-
-    def set_layers(self, args, n_d, n_e):
-        activation = get_activation_by_name(args.activation)
-
-        ##################
-        # Set layer type #
-        ##################
-        if args.layer.lower() == "lstm":
-            layer_type = LSTM
-        elif args.layer.lower() == "gru":
-            layer_type = GRU
-        elif args.layer.lower() == "grnn":
-            layer_type = GRNN
-        elif args.layer.lower() == "cnn":
-            layer_type = CNN
-        elif args.layer.lower() == "str_cnn":
-            layer_type = StrCNN
-        else:
-            layer_type = RCNN
-
-        ##############
-        # Set layers #
-        ##############
-        for i in range(args.depth):
-            if layer_type == CNN or layer_type == StrCNN:
-                feature_layer = layer_type(
-                    n_in=n_e if i == 0 else n_d,
-                    n_out=n_d,
-                    activation=activation,
-                    order=args.order
-                )
-            elif layer_type != RCNN:
-                feature_layer = layer_type(
-                    n_in=n_e if i == 0 else n_d,
-                    n_out=n_d,
-                    activation=activation
-                )
-            else:
-                feature_layer = layer_type(
-                    n_in=n_e if i == 0 else n_d,
-                    n_out=n_d,
-                    activation=activation,
-                    order=args.order,
-                    mode=args.mode,
-                    has_outgate=args.outgate
-                )
-            self.layers.append(feature_layer)
-
-    def input_layer(self, x):
-        """
-        :param x: 1D: n_words, 2D: n_sents
-        :return: 1D: n_words, 2D: n_sents, 3D: n_e
-        """
-        # 1D: n_words, 2D: n_sents, 3D: n_e
-        h = self.emb_layer.forward(x)
-        return apply_dropout(h, self.dropout)
-
-    def mid_layer(self, h_prev, x, pad_id):
-        """
-        :param h_prev: 1D: n_words, 2D: n_sents, 3D: n_e
-        :param x: 1D: n_words, 2D: n_sents
-        :return: 1D: n_sents, 2D: n_d
-        """
-        args = self.args
-
-        # 1D: n_words, 2D: n_sents, 3D: n_d
-        for i in range(args.depth):
-            h = self.layers[i].forward_all(h_prev)
-            h_prev = h
-
-        if args.normalize:
-            h = normalize_3d(h)
-
-        # 1D: n_sents, 2D: n_d
-        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
-            h = average_without_padding(h, x, pad_id)
-        else:
-            h = h[-1]
-
-        h = apply_dropout(h, self.dropout)
-
-        if args.normalize:
-            h = normalize_2d(h)
-
-        return h
-
-    @staticmethod
-    def output_layer(h):
-        """
-        :param h: 1D: n_sents, 2D: n_d
-        :return: 1D: n_sents/2
-        """
-        v = T.arange(h.shape[0] / 2)
-        sent_1 = h[v * 2, :]
-        sent_2 = h[(v + 1) * 2 - 1, :]
-        return T.nnet.sigmoid(T.sum(sent_1 * sent_2, axis=1))
+        raise NotImplementedError
 
     def set_params(self, layers):
         for l in layers:
@@ -220,9 +113,10 @@ class Model(object):
     def evaluate(samples, eval_func):
         crr = 0.
         ttl = 0.
-        for x, y in samples:
-            y_pred = eval_func(x)
+        for sample in samples:
+            y_pred = eval_func(*sample[:-1])
 
+            y = sample[-1]
             crr += len([1 for s1, s2 in zip(y, y_pred) if s1 == s2])
             ttl += len(y_pred)
 
@@ -247,14 +141,16 @@ class Model(object):
         # Set the functions #
         #####################
         train_func = theano.function(
-            inputs=[self.x, self.y],
+            inputs=self.train_inputs,
             outputs=[self.cost, self.loss, gnorm, self.y_pred],
-            updates=updates
+            updates=updates,
+            on_unused_input='ignore'
         )
 
         eval_func = theano.function(
-            inputs=[self.x],
-            outputs=self.y_pred
+            inputs=self.pred_inputs,
+            outputs=self.y_pred,
+            on_unused_input='ignore'
         )
 
         say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
@@ -281,8 +177,8 @@ class Model(object):
             start_time = time.time()
 
             for i, index in enumerate(batch_indices):
-                x, y = train_samples[index]
-                cur_cost, cur_loss, grad_norm, y_pred = train_func(x, y)
+                sample = train_samples[index]
+                cur_cost, cur_loss, grad_norm, y_pred = train_func(*sample)
 
                 if math.isnan(cur_loss):
                     say('\n\nNAN: Index: %d\n' % i)
@@ -291,6 +187,7 @@ class Model(object):
                 train_loss += cur_loss
                 train_cost += cur_cost
 
+                y = sample[-1]
                 crr += len([1 for s1, s2 in zip(y, y_pred) if s1 == s2])
                 ttl += len(y_pred)
 
@@ -328,3 +225,270 @@ class Model(object):
             say("\tTrain Accuracy: %f (%d/%d)\n" % (crr / ttl, crr, ttl))
             say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
             say("\n")
+
+
+class BaseModel(Model):
+
+    def compile(self):
+        # 1D: n_words, 2D: batch * n_cands
+        self.x = T.imatrix()
+        self.y = T.fvector()
+        self.train_inputs = [self.x, self.y]
+        self.pred_inputs = [self.x]
+
+        self.activation = self.args.activation
+        self.n_d = self.args.hidden_dim
+        self.n_e = self.emb_layers[0].n_d
+        self.pad_id = self.emb_layers[0].vocab_map[PAD]
+        self.dropout = theano.shared(np.float32(self.args.dropout).astype(theano.config.floatX))
+
+        self._set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
+
+        ###########
+        # Network #
+        ###########
+        h_in = self._input_layer(x=self.x)
+        h = self._mid_layer(h_prev=h_in, x=self.x, pad_id=self.pad_id)
+        y_scores = self._output_layer(h=h)
+        self.y_pred = T.le(0.5, y_scores)
+
+        #########################
+        # Set an objective func #
+        #########################
+        self.set_params(layers=self.layers)
+        self.loss = self.set_loss(self.y, y_scores)
+        self.cost = self.set_cost(args=self.args, params=self.params, loss=self.loss)
+
+    def _set_layers(self, args, n_d, n_e):
+        activation = get_activation_by_name(args.activation)
+
+        ##################
+        # Set layer type #
+        ##################
+        if args.layer.lower() == "lstm":
+            layer_type = LSTM
+        elif args.layer.lower() == "gru":
+            layer_type = GRU
+        elif args.layer.lower() == "grnn":
+            layer_type = GRNN
+        elif args.layer.lower() == "cnn":
+            layer_type = CNN
+        elif args.layer.lower() == "str_cnn":
+            layer_type = StrCNN
+        else:
+            layer_type = RCNN
+
+        ##############
+        # Set layers #
+        ##############
+        for i in range(args.depth):
+            if layer_type == CNN or layer_type == StrCNN:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation,
+                    order=args.order
+                )
+            elif layer_type != RCNN:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation
+                )
+            else:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation,
+                    order=args.order,
+                    mode=args.mode,
+                    has_outgate=args.outgate
+                )
+            self.layers.append(feature_layer)
+
+    def _input_layer(self, x):
+        """
+        :param x: 1D: n_words, 2D: n_sents
+        :return: 1D: n_words, 2D: n_sents, 3D: n_e
+        """
+        # 1D: n_words, 2D: n_sents, 3D: n_e
+        h = self.emb_layers[0].forward(x)
+        return apply_dropout(h, self.dropout)
+
+    def _mid_layer(self, h_prev, x, pad_id):
+        """
+        :param h_prev: 1D: n_words, 2D: n_sents, 3D: n_e
+        :param x: 1D: n_words, 2D: n_sents
+        :return: 1D: n_sents, 2D: n_d
+        """
+        args = self.args
+
+        # 1D: n_words, 2D: n_sents, 3D: n_d
+        for i in range(args.depth):
+            h = self.layers[i].forward_all(h_prev)
+            h_prev = h
+
+        if args.normalize:
+            h = normalize_3d(h)
+
+        # 1D: n_sents, 2D: n_d
+        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
+            h = average_without_padding(h, x, pad_id)
+        else:
+            h = h[-1]
+
+        h = apply_dropout(h, self.dropout)
+
+        if args.normalize:
+            h = normalize_2d(h)
+
+        return h
+
+    @staticmethod
+    def _output_layer(h):
+        """
+        :param h: 1D: n_sents, 2D: n_d
+        :return: 1D: n_sents/2
+        """
+        v = T.arange(h.shape[0] / 2)
+        sent_1 = h[v * 2, :]
+        sent_2 = h[(v + 1) * 2 - 1, :]
+        return T.nnet.sigmoid(T.sum(sent_1 * sent_2, axis=1))
+
+
+class SemModel(Model):
+
+    def compile(self):
+        # 1D: n_words, 2D: batch * 2
+        self.x_w = T.imatrix()
+        # 1D: batch * 2, 2D: n_words, 3D: n_props
+        self.x_s = T.itensor3()
+        self.y = T.fvector()
+        self.train_inputs = [self.x_w, self.x_s, self.y]
+        self.pred_inputs = [self.x_w, self.x_s]
+
+        self.activation = self.args.activation
+        self.n_d = self.args.hidden_dim
+        self.n_e = self.emb_layers[0].n_d
+        self.pad_id = self.emb_layers[0].vocab_map[PAD]
+        self.dropout = theano.shared(np.float32(self.args.dropout).astype(theano.config.floatX))
+
+        self._set_layers(args=self.args, n_d=self.n_d, n_e=self.n_e)
+
+        ###########
+        # Network #
+        ###########
+        # 1D: n_words, 2D: n_sents, 3D: n_e
+        h_w_in = self._input_layer(x=self.x_w, emb_layer=self.emb_layers[0])
+        # 1D: n_sents, 2D: n_words, 3D: n_props, 4D: n_e
+        h_s_in = self._input_layer(x=self.x_s, emb_layer=self.emb_layers[1])
+
+        # 1D: n_sents, 2D: n_d
+        h = self._mid_layer(h_prev=h_w_in, x=self.x_w, pad_id=self.pad_id)
+#        h = h + T.sum(T.sum(h_s_in, axis=2), axis=1)
+
+        y_scores = self._output_layer(h=h)
+        self.y_pred = T.le(0.5, y_scores)
+
+        #########################
+        # Set an objective func #
+        #########################
+        self.set_params(layers=self.layers)
+        self.loss = self.set_loss(self.y, y_scores)
+        self.cost = self.set_cost(args=self.args, params=self.params, loss=self.loss)
+
+    def _set_layers(self, args, n_d, n_e):
+        activation = get_activation_by_name(args.activation)
+
+        ##################
+        # Set layer type #
+        ##################
+        if args.layer.lower() == "lstm":
+            layer_type = LSTM
+        elif args.layer.lower() == "gru":
+            layer_type = GRU
+        elif args.layer.lower() == "grnn":
+            layer_type = GRNN
+        elif args.layer.lower() == "cnn":
+            layer_type = CNN
+        elif args.layer.lower() == "str_cnn":
+            layer_type = StrCNN
+        else:
+            layer_type = RCNN
+
+        ##############
+        # Set layers #
+        ##############
+        for i in range(args.depth):
+            if layer_type == CNN or layer_type == StrCNN:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation,
+                    order=args.order
+                )
+            elif layer_type != RCNN:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation
+                )
+            else:
+                feature_layer = layer_type(
+                    n_in=n_e if i == 0 else n_d,
+                    n_out=n_d,
+                    activation=activation,
+                    order=args.order,
+                    mode=args.mode,
+                    has_outgate=args.outgate
+                )
+            self.layers.append(feature_layer)
+
+    def _input_layer(self, x, emb_layer):
+        """
+        :param x: 1D: n_words, 2D: n_sents
+        :return: 1D: n_words, 2D: n_sents, 3D: n_e
+        """
+        # 1D: n_words, 2D: n_sents, 3D: n_e
+        h = emb_layer.forward(x)
+        return apply_dropout(h, self.dropout)
+
+    def _mid_layer(self, h_prev, x, pad_id):
+        """
+        :param h_prev: 1D: n_words, 2D: n_sents, 3D: n_e
+        :param x: 1D: n_words, 2D: n_sents
+        :return: 1D: n_sents, 2D: n_d
+        """
+        args = self.args
+
+        # 1D: n_words, 2D: n_sents, 3D: n_d
+        for i in range(args.depth):
+            h = self.layers[i].forward_all(h_prev)
+            h_prev = h
+
+        if args.normalize:
+            h = normalize_3d(h)
+
+        # 1D: n_sents, 2D: n_d
+        if args.average or args.layer == "cnn" or args.layer == "str_cnn":
+            h = average_without_padding(h, x, pad_id)
+        else:
+            h = h[-1]
+
+        h = apply_dropout(h, self.dropout)
+
+        if args.normalize:
+            h = normalize_2d(h)
+
+        return h
+
+    @staticmethod
+    def _output_layer(h):
+        """
+        :param h: 1D: n_sents, 2D: n_d
+        :return: 1D: n_sents/2
+        """
+        v = T.arange(h.shape[0] / 2)
+        sent_1 = h[v * 2, :]
+        sent_2 = h[(v + 1) * 2 - 1, :]
+        return T.nnet.sigmoid(T.sum(sent_1 * sent_2, axis=1))
