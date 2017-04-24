@@ -76,14 +76,20 @@ def _padding2d(matrix, pad_id=0):
 
 
 def _padding3d(tensor3d, pad_id=0):
+    """
+    :param tensor3d: 1D: batch_size, 2D: n_words, 3D: n_props
+    :param pad_id: scalar
+    :return: 1D: batch_size, 2D: max_n_words, 3D: max_n_props
+    """
     padded_tensor3d = []
-    max_row_len = max(1, max(len(matrix) for matrix in tensor3d))
-    max_column_len = max(1, max(len(row) for matrix in tensor3d for row in matrix))
+    max_n_words = max(1, max(len(matrix) for matrix in tensor3d))
+    max_n_props = max(1, max(len(row) for matrix in tensor3d for row in matrix))
     for matrix in tensor3d:
-        padded_tensor3d.append([np.pad(row, (max_column_len - len(row), 0), 'constant',
-                                       constant_values=pad_id) for row in matrix])
-        padded_tensor3d[-1].extend([np.pad([], (max_column_len, 0), 'constant',
-                                           constant_values=pad_id) for i in xrange(max_row_len - len(matrix))])
+        padded_tensor3d.append([np.pad(props, (0, max_n_props - len(props)), 'constant',
+                                       constant_values=pad_id) for props in matrix])
+        pad = [np.pad([], (0, max_n_props), 'constant',
+                      constant_values=pad_id) for i in xrange(max_n_words - len(matrix))]
+        padded_tensor3d[-1] = pad + padded_tensor3d[-1]
     return np.asarray(padded_tensor3d, 'int32')
 
 

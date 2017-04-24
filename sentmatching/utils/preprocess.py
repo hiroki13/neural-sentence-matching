@@ -4,7 +4,7 @@ from tokenizer import tokenize_msr_corpus
 
 from ..utils.io_utils import say, PAD, UNK
 from ..utils.loader import load_ubuntu_corpus, load_msr_corpus, load_embedding_iterator, load_annotations
-from ..utils.feat_factory import map_word_feat_to_id, map_sem_feat_to_id, map_label_to_id, get_msr_sem_feats, get_sem_role_list, map_corpus, map_msr_corpus
+from ..utils.feat_factory import map_word_feat_to_id, map_sem_feat_to_id, map_label_to_id, get_msr_feats, get_msr_sem_feats, get_sem_role_list, map_corpus, map_msr_corpus
 from ..utils.sample_factory import get_3d_batch, get_3d_batch_samples, create_batches, create_eval_batches
 from ..nn.basic import EmbeddingLayer
 
@@ -72,8 +72,8 @@ def get_msr_samples(args, emb_layer):
     train_corpus = load_msr_corpus(args.train)
     test_corpus = load_msr_corpus(args.test)
 
-    train_feats = get_msr_sem_feats(train_corpus)
-    test_feats = get_msr_sem_feats(test_corpus)
+    train_feats = get_msr_feats(train_corpus)
+    test_feats = get_msr_feats(test_corpus)
 
     train_w = map_word_feat_to_id(train_feats, emb_layer, filter_oov=args.filter_oov)
     test_w = map_word_feat_to_id(test_feats, emb_layer, filter_oov=args.filter_oov)
@@ -98,15 +98,22 @@ def get_msr_srl_samples(args, emb_layer):
     train_corpus = load_msr_corpus(args.train)
     test_corpus = load_msr_corpus(args.test)
 
+    # 1D: (feats1, feats2); feats1: 1D: n_pairs, 2D: (words1, pos1, preds1, sem_roles1)
     train_feats = get_msr_sem_feats(train_corpus)
     test_feats = get_msr_sem_feats(test_corpus)
 
     train_sem_role_corpus = get_sem_role_list(train_feats)
-    emb_layer_sem = get_emb_layer(raw_corpus=train_sem_role_corpus, n_d=args.hidden_dim, embs=None, cut_off=0)
+    emb_layer_sem = get_emb_layer(raw_corpus=train_sem_role_corpus,
+                                  n_d=emb_layer.n_d,
+                                  embs=None,
+                                  cut_off=0,
+                                  fix_init_embs=False)
 
+    # 1D: n_pairs, 2D: 2, 3D: n_words
     train_w = map_word_feat_to_id(train_feats, emb_layer, filter_oov=args.filter_oov)
     test_w = map_word_feat_to_id(test_feats, emb_layer, filter_oov=args.filter_oov)
 
+    # 1D: n_pairs, 2D: 2, 3D: n_words, 4D: n_props
     train_s = map_sem_feat_to_id(train_feats, emb_layer_sem, filter_oov=args.filter_oov)
     test_s = map_sem_feat_to_id(test_feats, emb_layer_sem, filter_oov=args.filter_oov)
 

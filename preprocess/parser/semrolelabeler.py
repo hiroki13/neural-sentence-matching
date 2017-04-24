@@ -9,7 +9,7 @@ class SemRoleLabeler(object):
         self.argv = argv
 
     def labeling(self, fn='corpus.tagged.txt'):
-        results = subprocess.Popen(['python', '-m', 'srl.cons_srl.api',
+        results = subprocess.Popen(['python', '-m', 'srl.cons_srl.main',
                                     '-mode', 'test',
                                     '--data_type', 'pos_tagged',
                                     '--test_data', fn,

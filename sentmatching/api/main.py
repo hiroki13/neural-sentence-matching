@@ -4,14 +4,14 @@ import argparse
 import numpy as np
 import theano
 
-import train
-
 np.random.seed(0)
 theano.config.floatX = 'float32'
 
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(sys.argv[0])
+
+#    argparser.add_argument("-mode", type=str, default='train/test')
     argparser.add_argument("--task", type=str, default='sqr')
 
     ########
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     argparser.add_argument("--cut_off", type=int, default=1)
     argparser.add_argument("--max_seq_len", type=int, default=100)
     argparser.add_argument("--data_size", type=int, default=1)
-    argparser.add_argument("--filter_oov", type=int, default=1)
+    argparser.add_argument("--filter_oov", type=int, default=0)
     argparser.add_argument("--body", type=int, default=0)
 
     #######################
@@ -71,4 +71,9 @@ if __name__ == "__main__":
     print args
     print
 
+#    if args.mode == 'train':
+    import train
     train.main(args)
+#    else:
+#        from ..tests import test_sem_net
+#        test_sem_net.main(args)

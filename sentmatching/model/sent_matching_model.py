@@ -122,10 +122,8 @@ class Model(object):
 
         return crr / ttl
 
-    def train(self, train_samples, dev_samples=None, test_samples=None):
+    def get_train_func(self):
         say('\nBuilding functions...\n\n')
-
-        args = self.args
 
         ############################
         # Set the update procedure #
@@ -133,8 +131,8 @@ class Model(object):
         updates, lr, gnorm = create_optimization_updates(
             cost=self.cost,
             params=self.params,
-            lr=args.learning_rate,
-            method=args.learning
+            lr=self.args.learning_rate,
+            method=self.args.learning
         )[:3]
 
         #####################
@@ -144,17 +142,22 @@ class Model(object):
             inputs=self.train_inputs,
             outputs=[self.cost, self.loss, gnorm, self.y_pred],
             updates=updates,
-            on_unused_input='ignore'
-        )
-
-        eval_func = theano.function(
-            inputs=self.pred_inputs,
-            outputs=self.y_pred,
-            on_unused_input='ignore'
+#            on_unused_input='ignore'
         )
 
         say("\tp_norm: {}\n".format(self.get_pnorm_stat()))
+        return train_func
 
+    def get_eval_func(self):
+        eval_func = theano.function(
+            inputs=self.pred_inputs,
+            outputs=self.y_pred,
+#            on_unused_input='ignore'
+        )
+        return eval_func
+
+    def train(self, train_func, eval_func, train_samples, dev_samples=None, test_samples=None):
+        args = self.args
         unchanged = 0
         best_acc = -1
 
@@ -382,10 +385,13 @@ class SemModel(Model):
         h_w_in = self._input_layer(x=self.x_w, emb_layer=self.emb_layers[0])
         # 1D: n_sents, 2D: n_words, 3D: n_props, 4D: n_e
         h_s_in = self._input_layer(x=self.x_s, emb_layer=self.emb_layers[1])
+        h_s_in = self._average_3d_without_padding(h_s_in, self.x_s, self.emb_layers[1].vocab_map[PAD])
+        h_w_in = h_w_in + h_s_in.dimshuffle(1, 0, 2)
+        self.u = h_w_in
 
         # 1D: n_sents, 2D: n_d
         h = self._mid_layer(h_prev=h_w_in, x=self.x_w, pad_id=self.pad_id)
-#        h = h + T.sum(T.sum(h_s_in, axis=2), axis=1)
+#        h = h + T.mean(T.mean(h_s_in, axis=2), axis=1)
 
         y_scores = self._output_layer(h=h)
         self.y_pred = T.le(0.5, y_scores)
@@ -393,6 +399,7 @@ class SemModel(Model):
         #########################
         # Set an objective func #
         #########################
+        self.layers.append(self.emb_layers[-1])
         self.set_params(layers=self.layers)
         self.loss = self.set_loss(self.y, y_scores)
         self.cost = self.set_cost(args=self.args, params=self.params, loss=self.loss)
@@ -492,3 +499,21 @@ class SemModel(Model):
         sent_1 = h[v * 2, :]
         sent_2 = h[(v + 1) * 2 - 1, :]
         return T.nnet.sigmoid(T.sum(sent_1 * sent_2, axis=1))
+
+    @staticmethod
+    def _get_3d_mask(x, padding_id):
+        # 1D: batch * 2, 2D: n_words, 3D: n_props
+        mask = T.neq(x, padding_id)
+        mask = T.cast(mask, theano.config.floatX)
+        return mask
+
+    @staticmethod
+    def _average_3d_without_padding(x, ids, padding_id, eps=1e-8):
+        """
+        :param x: 1D: batch * 2, 2D: n_words, 3D: n_props, 4D: n_d
+        :param ids: 1D: batch * 2, 2D: n_words, 3D: n_props
+        :return: 1D: batch, 2D: n_words, 3D: n_d
+        """
+        mask = T.neq(ids, padding_id).dimshuffle((0, 1, 2, 'x'))
+        mask = T.cast(mask, theano.config.floatX)
+        return T.sum(x * mask, axis=2) / (T.sum(mask, axis=2) + eps)

@@ -20,8 +20,8 @@ class StanfordTagger(POSTagger):
 
     def tagging(self, fn='corpus.tokenized.sents.txt'):
         results = subprocess.Popen(['java', '-mx300m', '-cp', 'pos/stanford-postagger.jar:pos/lib/*',
-                                    'edu.stanford.nlp.pos.maxent.MaxentTagger',
-                                    '-model', 'pos/models/english-left3words-distsim.pos',
+                                    'edu.stanford.nlp.tagger.maxent.MaxentTagger',
+                                    '-model', 'pos/models/english-left3words-distsim.tagger',
                                     '-sentenceDelimiter', 'newline',
                                     '-tokenize', 'false',
                                     '-textFile', fn],

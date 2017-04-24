@@ -1,4 +1,16 @@
 from io_utils import UNDER_BAR
+from tokenizer import tokenize
+
+
+def get_msr_feats(corpus):
+    feats1 = []
+    feats2 = []
+    for sample in corpus:
+        words1 = [word.lower() for word in tokenize(sample[1])]
+        words2 = [word.lower() for word in tokenize(sample[2])]
+        feats1.append([words1])
+        feats2.append([words2])
+    return feats1, feats2
 
 
 def get_msr_sem_feats(corpus):
@@ -7,8 +19,8 @@ def get_msr_sem_feats(corpus):
     for sample in corpus:
         words1, pos1, preds1, sem_roles1 = _separate_elems(sample[1].split())
         words2, pos2, preds2, sem_roles2 = _separate_elems(sample[2].split())
-        feats1.append((words1, pos1, preds1, sem_roles1))
-        feats2.append((words2, pos2, preds2, sem_roles2))
+        feats1.append([words1, pos1, preds1, sem_roles1])
+        feats2.append([words2, pos2, preds2, sem_roles2])
     return feats1, feats2
 
 
@@ -23,14 +35,14 @@ def _separate_elems(sent):
     sem_roles = []
     for word in sent:
         elems = word.split(UNDER_BAR)
-        words.append(elems[0])
+        words.append(elems[0].lower())
         pos.append(elems[1])
         preds.append(elems[2])
         if len(elems) > 3:
             sem_roles.append(elems[3:])
         else:
             sem_roles.append([])
-    assert len(words) == len(pos) == len(preds)
+    assert len(words) == len(pos) == len(preds) == len(sem_roles)
     return words, pos, preds, sem_roles
 
 

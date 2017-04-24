@@ -39,7 +39,12 @@ def train_pi(args):
         model = sent_matching_model.SemModel(args, [emb_layer, emb_layer_sem])
 
     model.compile()
-    model.train(train_samples, dev_samples=test_samples)
+    train_func = model.get_train_func()
+    eval_func = model.get_eval_func()
+    model.train(train_func=train_func,
+                eval_func=eval_func,
+                train_samples=train_samples,
+                dev_samples=test_samples)
 
 
 def train(args):
